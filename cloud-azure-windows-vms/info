@@ -1,0 +1,5 @@
+NAME=cloud-azure-windows-vms
+VERSION=2.0
+ALIAS=Cloud - Azure - Windows VMs
+DEPENDENCIES=
+OPSVIEW_MIN_VERSION=6.0.0

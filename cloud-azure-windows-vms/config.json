@@ -1,0 +1,526 @@
+{
+    "attribute": [
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg4" : "",
+         "label1" : "Subscription ID",
+         "label2" : "Client ID",
+         "label3" : "Secret Key",
+         "label4" : "Tenant ID",
+         "name" : "AZURE_CREDENTIALS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "1",
+         "secured4" : "0",
+         "value" : "Azure Credentials"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Storage Account Resource Group",
+         "label2" : "Storage Account Resource Name",
+         "label3" : "URL for Storage Account Blob",
+         "label4" : "",
+         "name" : "AZURE_STORAGE_ACC_DETAILS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Resource Details"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Connectivity Target Resource Group",
+         "label2" : "Connectivity Target Resource Name",
+         "label3" : "Connectivity Target Port",
+         "label4" : "",
+         "name" : "AZURE_CONNECTIVITY_TARGET_DETAILS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Resource Details"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Resource Group",
+         "label2" : "Resource Name",
+         "label3" : "",
+         "label4" : "",
+         "name" : "AZURE_RESOURCE_DETAILS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Resource Details"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Connectivity Source Resource Group",
+         "label2" : "Connectivity Source Resource Name",
+         "label3" : "",
+         "label4" : "",
+         "name" : "AZURE_CONNECTIVITY_SOURCE_DETAILS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Resource Details"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Network Watcher Resource Group",
+         "label2" : "Network Watcher Resource Name",
+         "label3" : "Maximum Display Number",
+         "label4" : "",
+         "name" : "AZURE_NETWORK_WATCHER_DETAILS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Resource Details"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Workspace ID",
+         "label2" : "Log Query Timespan",
+         "label3" : "",
+         "label4" : "",
+         "name" : "AZURE_LOG_ANALYTICS_DETAILS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Resource Details"
+        }
+    ],
+    "hosttemplate": [
+        {
+            "description": "Monitor your Azure Windows VMs",
+            "has_icon": "0",
+            "managementurls": [],
+            "name": "Cloud - Azure - Windows VMs",
+            "servicechecks": [
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Memory",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Processor Time",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Processor Queue Length",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Logical Disk Space",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - System Uptime",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Heartbeat",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Restarts",
+                    "timed_exception": null
+                },
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - Windows VM - Shutdowns",
+                    "timed_exception": null
+                }
+            ]
+        }
+    ],
+    "keyword": [],
+    "servicecheck": [
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Memory -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -w , -c ,",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Memory",
+            "description": "The percentage of used memory and the available memory in bytes [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Processor.Time -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -w '' -c ''",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Processor Time",
+            "description": "The percentage of processor time [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Processor.Queue.Length -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -w '' -c ''",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Processor Queue Length",
+            "description": "The processor queue length [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Logical.Disk.Space -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -w , -c ,",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Logical Disk Space",
+            "description": "The percentage of free space and the amount of free space in bytes [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.System.Uptime -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -w , -c ,",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - System Uptime",
+            "description": "The system uptime [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Heartbeat -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -w , -c ,",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Heartbeat",
+            "description": "The time between the last two heartbeats [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Restarts -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -lt '%AZURE_LOG_ANALYTICS_DETAILS:2%' -w '' -c ''",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Restarts",
+            "description": "The number of restarts, and information on the user and comment history [Timespan = 1440mins, Granularity = 1440mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        },
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Shutdowns -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -W '%AZURE_LOG_ANALYTICS_DETAILS:1%' -lt '%AZURE_LOG_ANALYTICS_DETAILS:2%' -w '' -c ''",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - Windows VM - Shutdowns",
+            "description": "The number of shutdowns, and information on the user and comment history [Timespan = 1440mins, Granularity = 1440mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - Windows VMs"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        }
+    
+    ],
+    "servicegroup": [
+        {
+            "name": "Cloud - Azure - Windows VMs"
+        }
+    ]
+}

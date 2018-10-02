@@ -1,0 +1,2156 @@
+#!/opt/opsview/python/bin/python
+from __future__ import division
+
+import argparse
+import datetime
+import requests.packages.urllib3
+import nagiosplugin
+
+from requests.packages.urllib3.exceptions import InsecurePlatformWarning
+from requests.packages.urllib3.exceptions import SNIMissingWarning
+
+import re
+from azure.mgmt.monitor import MonitorManagementClient
+from azure.common.credentials import ServicePrincipalCredentials
+
+from msrest.exceptions import AuthenticationError
+from azure.mgmt.monitor.models.error_response import ErrorResponseException
+import json
+import urllib
+from collections import namedtuple
+import json
+import requests
+import errno
+from collections import namedtuple
+from azure.mgmt.network import NetworkManagementClient
+from azure.mgmt.network.models import TroubleshootingParameters
+from msrestazure.azure_exceptions import CloudError
+
+# Stop SNIMissingWarning and InsecurePlatformWarning warnings
+requests.packages.urllib3.disable_warnings(InsecurePlatformWarning)
+requests.packages.urllib3.disable_warnings(SNIMissingWarning)
+
+
+LOG_ANALYTICS_PARAM_LEN = 2
+LOG_ANALYTICS_TIMED_PARAM_LEN = 3
+DEFAULT_LOG_QUERY_TIME_MIN = 1440
+
+LOG_ANALYTICS_URL = 'https://api.loganalytics.io/'
+RESOURCE_CHECK_API_VERSION = '2017-12-01'
+RESOURCE_GROUP_CHECK_API_VERSION = '2018-02-01'
+
+HEARTBEAT_INTERVAL_METRIC = 'Heartbeat Interval'
+HEARTBEAT_LAST_REPORTED_METRIC = 'Time Since Last Report'
+UPTIME_LAST_UPDATED_METRIC = 'Time Since Last Update'
+FREE_MEGABYTES_METRIC = 'Free Megabytes'
+
+PERCENTAGE_UNIT = '%'
+BYTES_UNIT = 'Bytes'
+SECONDS_UNIT = 's'
+
+NAGIOS_DEFAULT_THRESHOLD_RANGE = '0:0'
+
+LINUX_SHUTDOWN_COMMAND_RESTART_FLAG = '-r'
+LINUX_SHUTDOWN_COMMAND_CANCEL_FLAG = '-c'
+LINUX_SHUTDOWN_COMMAND_WARNING_FLAG = '-k'
+
+LINUX_RESTART_MESSAGE = 'Reached target Shutdown'
+AZURE_MACHINE_EVENT_MESSAGE = 'Shutdown request received'
+
+RESTART_ATTEMPTS_NAME = 'Restart_Attempts'
+SHUTDOWN_ATTEMPTS_NAME = 'Shutdown_Attempts'
+
+MACHINE_EVENTS_CONTEXT_NAME = 'machine_events'
+LINUX_MACHINE_EVENTS_CONTEXT_NAME = '{0}_{1}'.format('linux', MACHINE_EVENTS_CONTEXT_NAME)
+WINDOWS_MACHINE_EVENTS_CONTEXT_NAME = '{0}_{1}'.format('windows', MACHINE_EVENTS_CONTEXT_NAME)
+
+UPTIME = 'Uptime'
+HEARTBEAT = 'Heartbeat'
+LINUX_SHUTDOWNS_MODE = 'Linux.VM.Shutdowns'
+WINDOWS_SHUTDOWNS_MODE = 'Windows.VM.Shutdowns'
+LINUX_RESTARTS_MODE = 'Linux.VM.Restarts'
+WINDOWS_RESTARTS_MODE = 'Windows.VM.Restarts'
+SHUTDOWN = 'Shutdown'
+
+RESTART_REGEX_MATCHES = ['Reached target Shutdown.*',
+                         '.*COMMAND=/sbin/shutdown -c.*',
+                         '.*COMMAND=/sbin/shutdown -r.*',
+                         '.*COMMAND=/sbin/init 6.*',
+                         '.*COMMAND=/sbin/telinit 6.*',
+                         '.*COMMAND=/bin/systemctl reboot.*',
+                         '.*COMMAND=/sbin/reboot.*',
+                         '.*COMMAND=/bin/systemctl halt --reboot.*']
+
+SHUTDOWN_REGEX_MATCHES = ['.*Shutdown request received.*',
+                          '.*COMMAND=/sbin/shutdown.*',
+                          '.*COMMAND=/sbin/poweroff.*',
+                          '.*COMMAND=/sbin/init 0.*',
+                          '.*COMMAND=/sbin/telinit 0.*',
+                          '.*COMMAND=/bin/systemctl poweroff.*',
+                          '.*COMMAND=/bin/systemctl halt.*']
+
+PERFORMANCE_DATA_TO_IGNORE = ['Available_Memory', 'Free', 'Available',
+                              'Time_Since_Last_Update', 'Time_Since_Last_Report']
+CONNECTIVITY_API_VERSION = '2018-04-01'
+
+DEFAULT_MAX_DISP = 5
+DEFAULT_CHECK_INTERVAL = 300
+MIN_CACHE_TIME_SECONDS = 600
+
+DEFAULT_TMP_CONNECTIVITY_LOCATION = '/opt/opsview/monitoringscripts/tmp/azure_mgmt_network_connectivity_location'
+DEFAULT_TMP_CONNECTIVITY_DATA = '/opt/opsview/monitoringscripts/tmp/azure_mgmt_network_connectivity_data'
+DEFAULT_TMP_TROUBLESHOOTING = '/opt/opsview/monitoringscripts/tmp/azure_mgmt_network_troubleshooting'
+
+MGMT_NETWORK_PROVIDER_LEN_CONNECTIVITY_CHECK = 8
+MGMT_NETWORK_PROVIDER_LEN_TROUBLESHOOTING = 7
+MGMT_NETWORK_PROVIDER_LEN_CONNECTION_MONITORS = 3
+MGMT_NETWORK_PROVIDER_LEN_SECURITY_RULES = 4
+
+CONNECTIVITY_STATES = {'reachable': 'Reachable', 'unreachable': 'Unreachable'}
+TROUBLESHOOTING_STATES = {'healthy': 'Healthy', 'unhealthy': 'UnHealthy'}
+WARNING_MONITOR_STATES = {'stopped': 'Stopped', 'notstarted': 'NotStarted'}
+
+KILOBYTE = 1024
+MEGABYTE = 1048576
+GIGABYTE = 1073741824
+TERABYTE = 1099511627776
+
+MINUTE = 60
+HOUR = 3600
+DAY = 86400
+
+UNITS = {'Count': '', 'Percent': '%', 'Seconds': 's', 'Milliseconds': 'ms'}
+
+MICROSOFT_API_URL = 'https://login.microsoftonline.com/'
+AZURE_MGMT_URL = 'https://management.azure.com/'
+
+
+class ParamError(Exception):
+    pass
+
+
+class ResultError(Exception):
+    pass
+
+
+class AssumedOK(Exception):
+    pass
+
+
+def convert_seconds(count_seconds):
+    days = count_seconds // DAY
+    hours = (count_seconds - (days * DAY)) // HOUR
+    mins = (count_seconds - (days * DAY) - (hours * HOUR)) // MINUTE
+    seconds = (count_seconds - (days * DAY) - (hours * HOUR) - (mins * MINUTE))
+
+    value = ''
+    unit = ''
+    if days:
+        value = "{0:.0f}d {1:.0f}h {2:.0f}m {3:.0f}s".format(days, hours, mins, seconds)
+    elif hours:
+        value = "{0:.0f}h {1:.0f}m {2:.0f}s".format(hours, mins, seconds)
+    elif mins:
+        value = "{0:.0f}m {1:.0f}s".format(mins, seconds)
+    else:
+        value = "{0:.0f}s".format(seconds)
+
+    return value, unit
+
+
+def convert_bytes(bytes_count, persecond):
+    count = bytes_count
+    unit = "B"
+    if bytes_count > TERABYTE:
+        count = bytes_count / TERABYTE
+        unit = "TB"
+    elif bytes_count > GIGABYTE:
+        count = bytes_count / GIGABYTE
+        unit = "GB"
+    elif bytes_count > MEGABYTE:
+        count = bytes_count / MEGABYTE
+        unit = "MB"
+    elif bytes_count > KILOBYTE:
+        count = bytes_count / KILOBYTE
+        unit = "KB"
+    return count, unit + ('/s' if persecond else '')
+
+
+class Metric(nagiosplugin.Resource):
+
+    def __init__(self, plugin_object):
+            self.plugin = plugin_object
+
+    def probe(self):
+        return self.plugin.get_metrics()
+
+
+class Plugin(object):
+
+    def __init__(self, client_id, secret_key, tenant_id, subscription_id, resource_group, provider, metrics,
+                 aggregation, unit, timespan, interval, thresholds_warning, thresholds_critical, mode, check_interval):
+            self.client_id = client_id.strip()
+            self.secret_key = secret_key.strip()
+            self.tenant_id = tenant_id.strip()
+            self.subscription_id = subscription_id.strip()
+            self.resource_group = resource_group
+            self.provider = provider
+            self.aggregation = aggregation
+            self.unit = unit
+            self.timespan = timespan
+            self.interval = interval
+            self.metrics = metrics
+            self.thresholds_warning = thresholds_warning
+            self.thresholds_critical = thresholds_critical
+            self.mode = mode
+            self.check_interval = check_interval
+
+
+class MgmtMonitorSummary(nagiosplugin.Summary):
+
+    def ok(self, results):
+        # for bytes we need to convert to KB/MB/GB/TB as appropriate
+        summary = []
+        for result in results:
+            context = re.sub(r'(\w)([A-Z])', r'\1 \2', result.metric.context).title()
+            if 'Bytes' in result.metric.uom:
+                value, uom = convert_bytes(result.metric.value, ('Second' in result.metric.uom))
+            else:
+                value, uom = (result.metric.value, result.metric.uom)
+            summary.append('{} is {:.2f}{}'.format(context, value, uom))
+
+        return ', '.join(summary)
+
+    def problem(self, results):
+        # for bytes we need to convert to KB/MB/GB/TB as appropriate
+        summary = []
+        for result in results:
+            context = re.sub(r'(\w)([A-Z])', r'\1 \2', result.metric.context).title()
+            if result.hint:
+                if result.state == nagiosplugin.Warn:
+                    violation = ' ({})'.format(result.metric.contextobj.warning.violation)
+                else:
+                    violation = ' ({})'.format(result.metric.contextobj.critical.violation)
+                if 'Bytes' in result.metric.uom:
+                    value, uom = convert_bytes(result.metric.value, ('Second' in result.metric.uom))
+                else:
+                    value, uom = (result.metric.value, result.metric.uom)
+                summary.append('{} is {:.2f}{}{}'.format(context, value, uom, violation))
+        return ', '.join(summary)
+
+
+class MgmtMonitor(Plugin):
+
+    def __init__(self, *args):
+        super(MgmtMonitor, self).__init__(*args)
+
+    def _get_timespan(self, timespan, interval):
+        time_now = datetime.datetime.utcnow()
+        last_run = time_now - datetime.timedelta(seconds=int(timespan))
+
+        timespan = '{0}/{1}'.format(last_run.strftime('%Y-%m-%dT%H:%M:%SZ'), time_now.strftime('%Y-%m-%dT%H:%M:%SZ'))
+        interval = 'PT{}S'.format(interval)
+
+        return timespan, interval
+
+    def _convert_name(self, name):
+        name = re.sub(r'(\w)([A-Z])', r'\1_\2', name).title()
+        return name
+
+    def get_metrics(self):
+        try:
+            credentials = ServicePrincipalCredentials(
+                client_id=self.client_id,
+                secret=self.secret_key,
+                tenant=self.tenant_id
+            )
+        except AuthenticationError as e:
+            raise ResultError(e.inner_exception.error_response['error_description'])
+
+        resource_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/{2}'
+
+        ).format(self.subscription_id, self.resource_group, self.provider)
+
+        client = MonitorManagementClient(
+            credentials,
+            self.subscription_id
+        )
+
+        # if the timespan is not equal to the interval,
+        # we will have to gather several metrics and average them ourselves
+        timespan, interval = self._get_timespan(self.timespan, self.interval)
+        try:
+            metrics_data = client.metrics.list(
+                resource_id,
+                metricnames=self.metrics,
+                aggregation=self.aggregation,
+                timespan=timespan,
+                interval=interval
+            )
+        except ErrorResponseException as e:
+            code = e.response.status_code
+            if code == 403:
+                raise ResultError(("Your Service Principal is not authorized for this action."
+                                   "\nWe Requested Resource ID:"
+                                   "\n   {0}"
+                                   "\nWith Service Principal:"
+                                   "\n   Client ID={1}")
+                                  .format(resource_id, self.client_id))
+            elif code == 404:
+                raise ResultError("The Azure Resource could not be located."
+                                  "\nWe Requested Resource ID:"
+                                  "\n   {}"
+                                  .format(resource_id))
+            else:
+                raise ResultError(("Encountered error while retrieving metrics."
+                                   "\nWe Requested Resource ID:"
+                                   "\n   {0}"
+                                   "\nAnd Got Error: {1}")
+                                  .format(resource_id, e.message))
+
+        metrics_values = metrics_data.value
+
+        metric_results = []
+        for value in metrics_values:
+            total = 0
+            length = 0
+            if not value.timeseries:
+                raise ResultError(("The Azure Server returned no results."
+                                   "\nWe Requested:"
+                                   "\n   Resource ID={0}"
+                                   "\n   Metrics=[{1}]"
+                                   "\n   Aggregation={2}"
+                                   "\n   Timespan={3}"
+                                   "\n   Interval={4}")
+                                  .format(resource_id, self.metrics, self.aggregation, self.timespan,
+                                          self.interval))
+
+            metric = None
+            for data in value.timeseries[0].data:
+                if self.aggregation == 'Total':
+                    metric = data.total
+                elif self.aggregation == 'Average':
+                    metric = data.average
+                elif self.aggregation == 'Count':
+                    metric = data.count
+                elif self.aggregation == 'Minimum':
+                    metric = data.minimum
+                elif self.aggregation == 'Maximum':
+                    metric = data.maximum
+
+                if metric is not None:
+                    total += metric
+                    length += 1
+
+            if length == 0:
+                raise ResultError(("The Azure Server returned no results."
+                                   "\nWe Requested:"
+                                   "\n   Resource ID={0}"
+                                   "\n   Metrics=[{1}]"
+                                   "\n   Aggregation={2}"
+                                   "\n   Timespan={3}"
+                                   "\n   Interval={4}")
+                                  .format(resource_id, self.metrics, self.aggregation, self.timespan,
+                                          self.interval))
+            avg = total / length
+            metric_results.append(avg)
+
+        metric_names = self.metrics.split(',')
+        self.unit = UNITS.get(self.unit, self.unit)
+
+        nagiosmetrics = []
+        for metric, metric_result in zip(metric_names, metric_results):
+            nagiosmetrics.append(nagiosplugin.Metric(self._convert_name(metric), metric_result,
+                                                     uom=self.unit, context=metric))
+
+        return nagiosmetrics
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource, MgmtMonitorSummary())
+        for metric, threshold_warning, threshold_critical in zip(self.metrics.split(','), self.thresholds_warning,
+                                                                 self.thresholds_critical):
+            check.add(nagiosplugin.ScalarContext(metric, threshold_warning, threshold_critical))
+
+        return check
+
+
+class LogAnalyticsSummary(nagiosplugin.Summary):
+
+    # results are either a single value e.g. memory swap space is 0%
+    # or two values, e.g. used memory is 25% (memory available 1.5GB)
+    @staticmethod
+    def _get_summary(results, is_problem):
+        summary = []
+        for result in results:
+            name = re.sub(r'(\w)_(\w)', r'\1 \2', result.metric.name).title()
+            value = result.metric.value
+            uom = result.metric.uom
+
+            if uom == SECONDS_UNIT:
+                value, uom = convert_seconds(value)
+            elif uom == BYTES_UNIT:
+                value, uom = convert_bytes(value, False)
+
+            if isinstance(value, float):
+                value = '{0:.2f}'.format(value)
+
+            if is_problem and result.hint:
+                summary.append('{0} is {1}{2} ({3})'.format(name, value, uom, result.hint))
+            else:
+                summary.append('{0} is {1}{2}'.format(name, value, uom))
+
+        return ', '.join(summary)
+
+    def ok(self, results):
+        return self._get_summary(results, False)
+
+    def problem(self, results):
+        return self._get_summary(results, True)
+
+
+class LogAnalyticsMachineEventsSummary(nagiosplugin.Summary):
+
+    def __init__(self, params, os_type):
+        self.params = params
+        self.os_type = os_type
+
+    def _get_linux_summary(self, results, is_problem):
+        result = results[0]
+        value = 0
+        invokes = []
+        for item in result.metric.value:
+            command = item[1]
+            if LINUX_SHUTDOWN_COMMAND_WARNING_FLAG not in command and LINUX_SHUTDOWN_COMMAND_CANCEL_FLAG not in command:
+                if LINUX_SHUTDOWN_COMMAND_RESTART_FLAG not in command or result.metric.name == RESTART_ATTEMPTS_NAME:
+                    value += 1
+                    invokes.append(item)
+        action = result.metric.name.replace('_', ' ').lower().replace('attempts', 'attempt(s)')
+        query_time = self.params.query_time if self.params.query_time else DEFAULT_LOG_QUERY_TIME_MIN
+        summary = '{0} has had {1} {2} in the last {3}m'.format(self.params.resource_name, value, action,
+                                                                query_time)
+        if is_problem and result.hint:
+            summary += ' ({0})'.format(result.hint)
+
+        if len(invokes):
+            summary += '\n\nCommand Invokes:'
+
+        for item in invokes:
+            gen_time = item[0]
+            command = item[1]
+            timestamp = datetime.datetime.strptime(gen_time, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d %H:%M:%S UTC')
+            match = re.search(r'([a-zA-Z0-9]+) ?:.*COMMAND=(.*)', command)
+            if match:
+                user = match.group(1)
+                command = '`{0}`'.format(match.group(2))
+            elif LINUX_RESTART_MESSAGE in command:
+                user = 'System'
+                command = 'System Restart'
+            elif AZURE_MACHINE_EVENT_MESSAGE in command:
+                user = 'Azure'
+                command = 'Azure VM Restart/Shutdown'
+            else:
+                user = 'Unknown'
+                command = 'Unknown command: `{0}`'.format(command)
+            summary += ('\n\nDate/Time: {0}'
+                        '\nUser: {1}'
+                        '\nCommand: {2}').format(timestamp, user, command)
+        return summary
+
+    def _get_windows_summary(self, results, is_problem):
+        result = results[0]
+        invokes = result.metric.value
+        value = len(invokes)
+        action = result.metric.name.replace('_', ' ').lower().replace('attempts', 'attempt(s)')
+
+        query_time = self.params.query_time or DEFAULT_LOG_QUERY_TIME_MIN
+        summary = '{0} has had {1} {2} in the last {3}m'.format(self.params.resource_name, value, action,
+                                                                query_time)
+        if is_problem and result.hint:
+            summary += ' ({0})'.format(result.hint)
+
+        if len(invokes):
+            summary += '\n\nCommand Invokes:'
+
+        for item in invokes:
+            gen_time = item[0]
+            command = item[1]
+            timestamp = datetime.datetime.strptime(gen_time, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d %H:%M:%S UTC')
+            match = re.search(r'on behalf of user (.*) for the following reason:.*Comment: (.*)', command)
+            if match:
+                user = match.group(1)
+                comment = match.group(2)
+            else:
+                user = 'Unknown'
+                comment = None
+            summary += ('\n\nDate/Time: {0}'
+                        '\nUser: {1}').format(timestamp, user)
+
+            if comment and comment != ' ':
+                summary += '\nComment: {0}'.format(comment)
+        return summary
+
+    def ok(self, results):
+        if self.os_type == 'linux':
+            result = self._get_linux_summary(results, False)
+        elif self.os_type == 'windows':
+            result = self._get_windows_summary(results, False)
+        else:
+            raise ParamError("Invalid OS Type given in LogAnalyticsMachineEventsSummary constructor")
+        return result
+
+    def problem(self, results):
+        if self.os_type == 'linux':
+            result = self._get_linux_summary(results, True)
+        elif self.os_type == 'windows':
+            result = self._get_windows_summary(results, True)
+        else:
+            raise ParamError("Invalid OS Type given in LogAnalyticsMachineEventsSummary constructor")
+        return result
+
+
+class LogAnalyticsContext(nagiosplugin.ScalarContext):
+
+    def performance(self, metric, resource):
+        if metric.name in PERFORMANCE_DATA_TO_IGNORE:
+            return None
+        return super(LogAnalyticsContext, self).performance(metric, resource)
+
+
+class LogAnalyticsLinuxMachineEventsContext(nagiosplugin.Context):
+
+    def __init__(self, name, warning, critical):
+        super(LogAnalyticsLinuxMachineEventsContext, self).__init__(name)
+        self.warning = nagiosplugin.Range(warning or NAGIOS_DEFAULT_THRESHOLD_RANGE)
+        self.critical = nagiosplugin.Range(critical or NAGIOS_DEFAULT_THRESHOLD_RANGE)
+
+    @staticmethod
+    def _count_shutdowns(restarts, invokes):
+        num_shutdowns = 0
+        for item in invokes:
+            command = item[1]
+            if LINUX_SHUTDOWN_COMMAND_CANCEL_FLAG not in command and LINUX_SHUTDOWN_COMMAND_WARNING_FLAG not in command:
+                if LINUX_SHUTDOWN_COMMAND_RESTART_FLAG not in command or restarts:
+                    num_shutdowns += 1
+        return num_shutdowns
+
+    def evaluate(self, metric, resource):
+        num_shutdowns = self._count_shutdowns(metric.name == RESTART_ATTEMPTS_NAME, metric.value)
+        if not self.critical.match(num_shutdowns):
+            state = nagiosplugin.Critical
+            hint = self.critical.violation
+        elif not self.warning.match(num_shutdowns):
+            state = nagiosplugin.Warn
+            hint = self.warning.violation
+        else:
+            state = nagiosplugin.Ok
+            hint = ''
+        return nagiosplugin.Result(state, metric=metric, hint=hint)
+
+    def performance(self, metric, resource):
+        num_shutdowns = self._count_shutdowns(metric.name == RESTART_ATTEMPTS_NAME, metric.value)
+        return nagiosplugin.Performance(metric.name, num_shutdowns, uom='', warn=self.warning, crit=self.critical)
+
+
+class LogAnalyticsWindowsMachineEventsContext(nagiosplugin.Context):
+
+    def __init__(self, name, warning, critical):
+        super(LogAnalyticsWindowsMachineEventsContext, self).__init__(name)
+        self.warning = nagiosplugin.Range(warning or NAGIOS_DEFAULT_THRESHOLD_RANGE)
+        self.critical = nagiosplugin.Range(critical or NAGIOS_DEFAULT_THRESHOLD_RANGE)
+
+    def evaluate(self, metric, resource):
+        num_shutdowns = len(metric.value)
+        if not self.critical.match(num_shutdowns):
+            state = nagiosplugin.Critical
+            hint = self.critical.violation
+        elif not self.warning.match(num_shutdowns):
+            state = nagiosplugin.Warn
+            hint = self.warning.violation
+        else:
+            state = nagiosplugin.Ok
+            hint = ''
+        return nagiosplugin.Result(state, metric=metric, hint=hint)
+
+    def performance(self, metric, resource):
+        return nagiosplugin.Performance(metric.name, len(metric.value), uom='', warn=self.warning, crit=self.critical)
+
+
+class LogAnalytics(Plugin):
+
+    def __init__(self, *args):
+        super(LogAnalytics, self).__init__(*args)
+        self.auth_url = '{0}{1}/oauth2/token'.format(MICROSOFT_API_URL, self.tenant_id)
+
+        params = namedtuple('LogAnalyticsParams', ('resource_name', 'workspace_id'))
+        timed_params = namedtuple('LogAnalyticsTimedParams', ('resource_name', 'workspace_id', 'query_time'))
+        self.os_type = None
+
+        if UPTIME in self.mode:
+            self.generate_query = self.gen_uptime_query
+            self.process_query = self.process_uptime_results
+            self.params, length = params, LOG_ANALYTICS_PARAM_LEN
+        elif HEARTBEAT in self.mode:
+            self.generate_query = self.gen_heartbeat_query
+            self.process_query = self.process_heartbeat_results
+            self.params, length = params, LOG_ANALYTICS_PARAM_LEN
+        elif LINUX_SHUTDOWNS_MODE in self.mode or LINUX_RESTARTS_MODE in self.mode:
+            self.generate_query = lambda met, resrc: self.gen_linux_events_query(SHUTDOWN in self.mode, met, resrc)
+            self.params, length = timed_params, LOG_ANALYTICS_TIMED_PARAM_LEN
+            self.os_type = 'linux'
+            self.process_query = lambda results: self.process_machine_events_results(SHUTDOWN in self.mode,
+                                                                                     self.os_type, results)
+        elif WINDOWS_SHUTDOWNS_MODE in self.mode or WINDOWS_RESTARTS_MODE in self.mode:
+            self.generate_query = lambda met, resrc: self.gen_windows_events_query(SHUTDOWN in self.mode, met, resrc)
+            self.params, length = timed_params, LOG_ANALYTICS_TIMED_PARAM_LEN
+            self.os_type = 'windows'
+            self.process_query = lambda results: self.process_machine_events_results(SHUTDOWN in self.mode,
+                                                                                     self.os_type, results)
+        else:
+            self.generate_query = self.gen_query
+            self.process_query = self.process_perf_results
+            self.params, length = params, LOG_ANALYTICS_PARAM_LEN
+
+        paramslist = self.provider.split(',')
+        if len(paramslist) != length:
+            raise ParamError("Provider string should contain exactly {0} variables, not {1}"
+                             .format(length, len(paramslist)))
+        self.params = self.params._make(paramslist)
+
+        if not self.tenant_id:
+            raise ParamError("The tenant id cannot be empty.")
+
+        if not self.params.resource_name:
+            raise ParamError("The resource name cannot be empty.")
+
+        if not self.subscription_id:
+            raise ParamError("The subscription id cannot be empty.")
+
+        mgmt_token = self.get_token(self.auth_url, self.client_id, self.secret_key, AZURE_MGMT_URL)
+        headers = {'Authorization': 'Bearer {0}'.format(mgmt_token)}
+        self.check_resource_group(headers)
+        self.check_resource(headers)
+
+    def check_resource_group(self, headers):
+        req_url = '{0}subscriptions/{1}/resourcegroups/{2}?api-version={3}'.format(AZURE_MGMT_URL,
+                                                                                   self.subscription_id,
+                                                                                   self.resource_group,
+                                                                                   RESOURCE_GROUP_CHECK_API_VERSION)
+        req_result = requests.head(req_url, headers=headers)
+        if req_result.status_code == 404:
+            raise ParamError(("The resource group '{0}' does not exist within the subscription with id '{1}'. "
+                              "Please make sure these are correct.").format(self.resource_group, self.subscription_id))
+        elif req_result.status_code == 403:
+            raise ParamError("The Service Principal given is not authorised for this action.")
+        elif req_result.status_code != 204:
+            raise ParamError("Received Response {0} from Azure: {1}".format(req_result.status_code, req_result.text))
+
+    def check_resource(self, headers):
+        req_url = ('{0}subscriptions/{1}/resourcegroups/{2}/providers/Microsoft.Compute/virtualMachines/{3}?'
+                   'api-version={4}').format(AZURE_MGMT_URL, self.subscription_id, self.resource_group,
+                                             self.params.resource_name, RESOURCE_CHECK_API_VERSION)
+        req_result = requests.get(req_url, headers=headers)
+        if req_result.status_code == 404:
+            raise ParamError(("The resource '{0}' does not exist. "
+                              "Please make sure the resource exists.").format(self.params.resource_name))
+        elif req_result.status_code == 403:
+            raise ParamError("The Service Principal given is not authorised for this action.")
+        elif req_result.status_code != 200:
+            raise ParamError("Received Response {0} from Azure: {1}".format(req_result.status_code, req_result.text))
+
+    def convert_name(self, name):
+        return name.replace(' ', '_').title()
+
+    def process_machine_events_results(self, shutdown, os_type, results):
+        return [nagiosplugin.Metric(self.convert_name(SHUTDOWN_ATTEMPTS_NAME if shutdown else RESTART_ATTEMPTS_NAME),
+                                    results[0], '', context='{0}_{1}'.format(os_type, MACHINE_EVENTS_CONTEXT_NAME))]
+
+    def process_heartbeat_results(self, results):
+        nagiosmetrics = []
+
+        context = HEARTBEAT_INTERVAL_METRIC
+        name = context
+        unit = SECONDS_UNIT
+
+        # should have two results
+        if len(results) != 2:
+            raise ResultError("Could not retrieve the last two heartbeats")
+
+        # heartbeat result is array (len 1) containing time_generated
+        heartbeat1 = datetime.datetime.strptime(results[0][0], '%Y-%m-%dT%H:%M:%S.%fZ')
+        heartbeat2 = datetime.datetime.strptime(results[1][0], '%Y-%m-%dT%H:%M:%S.%fZ')
+        heartbeat_delta = heartbeat1 - heartbeat2
+        value = heartbeat_delta.total_seconds()
+
+        nagiosmetrics.append(nagiosplugin.Metric(self.convert_name(name), value, unit, context=context))
+
+        context = HEARTBEAT_LAST_REPORTED_METRIC
+        name = context
+
+        now = datetime.datetime.utcnow()
+        time_since_last_heartbeat = now - heartbeat1
+        value = time_since_last_heartbeat.total_seconds()
+
+        nagiosmetrics.append(nagiosplugin.Metric(self.convert_name(name), value, unit, context=context))
+
+        return nagiosmetrics
+
+    def process_uptime_results(self, results):
+        nagiosmetrics = []
+        for result in results:
+            # uptime result is array (len 3) containing [metric_name, metric_value, time_generated]
+            context = result[0]
+            name = context
+            value = result[1]
+            unit = SECONDS_UNIT
+
+            nagiosmetrics.append(nagiosplugin.Metric(self.convert_name(name), value, unit, context=context))
+
+            context = UPTIME_LAST_UPDATED_METRIC
+            name = context
+
+            last_update = datetime.datetime.strptime(result[2], '%Y-%m-%dT%H:%M:%S.%fZ')
+            now = datetime.datetime.utcnow()
+            time_since_last_update = now - last_update
+            value = time_since_last_update.total_seconds()
+
+            nagiosmetrics.append(nagiosplugin.Metric(self.convert_name(name), value, unit, context=context))
+
+        return nagiosmetrics
+
+    def process_perf_results(self, results):
+        nagiosmetrics = []
+        for result in results:
+            # performance result is array (len 3) containing [resource_name, metric_name, metric_value]
+            context = result[1]
+            name = result[1]
+            value = result[2]
+            unit = ''
+
+            # remove '% ' from the start
+            if name.startswith(PERCENTAGE_UNIT):
+                _, unit, name = name.partition(PERCENTAGE_UNIT)
+                name = name.strip()
+
+            # memory results are returned as MBytes on linux and Mbytes on Windows
+            # logical disk results are returned as Megabytes
+            # remove mbytes/megabytes from name and convert to bytes
+            rmwords = ['MBytes', 'Mbytes', 'Megabytes']
+            for rmword in rmwords:
+                if rmword in name:
+                    a, _, b = name.partition(rmword)
+                    name = '{0}{1}'.format(a.strip(), b)
+                    value = value * MEGABYTE
+                    unit = BYTES_UNIT
+
+            nagiosmetrics.append(nagiosplugin.Metric(self.convert_name(name), value, unit, context=context))
+        return nagiosmetrics
+
+    def get_token(self, auth_url, client_id, secret_key, resource):
+        client_key_encoded = urllib.quote_plus(secret_key)
+        post_body = (
+            'grant_type=client_credentials&'
+            'client_id={0}&'
+            'client_secret={1}&'
+            'resource={2}'
+        ).format(client_id, client_key_encoded, resource)
+
+        auth_result = requests.post(auth_url, data=post_body)
+        if auth_result.status_code != 200:
+            try:
+                error_json = json.loads(auth_result.text)
+                error_description = error_json.get('error_description', None)
+                if not error_description:
+                    error_description = auth_result.text
+            except ValueError:
+                error_description = auth_result.text
+
+            raise ResultError("Status: {0} - {1}".format(auth_result.status_code, error_description))
+
+        json_response = json.loads(auth_result.text)
+        auth_token = json_response['access_token']
+        return auth_token
+
+    def gen_query(self, metric_names, resource_name):
+        counter_list = ["CounterName=='{0}'".format(metric_name) for metric_name in metric_names]
+        counters = ' or '.join(counter_list)
+        query = "Perf | where TimeGenerated > ago(5m) and Computer=='{0}' and ({1})".format(resource_name, counters)
+        if FREE_MEGABYTES_METRIC in metric_names:
+            query += " and InstanceName == '_Total'"
+        query += ' | summarize avg(CounterValue) by Computer, CounterName | sort by CounterName asc'
+        return query
+
+    def gen_heartbeat_query(self, metric_names, resource_name):
+        query = ("Heartbeat | where Computer=='{0}' | project TimeGenerated | order by TimeGenerated | "
+                 "take 2").format(resource_name)
+        return query
+
+    def gen_uptime_query(self, metric_names, resource_name):
+        query = "Perf | where TimeGenerated > ago(5m) and Computer=='{0}' and (".format(resource_name)
+        counters = ["CounterName=='{0}'".format(metric_name) for metric_name in metric_names]
+        query += ' or '.join(counters)
+        query += ') | order by TimeGenerated | take 1 | project CounterName, CounterValue, TimeGenerated'
+        return query
+
+    def gen_linux_events_query(self, shutdown, metric_names, resource_name):
+        query_time = self.params.query_time if self.params.query_time else DEFAULT_LOG_QUERY_TIME_MIN
+        query = ("Syslog | where TimeGenerated > ago({0}m) and Computer == '{1}' "
+                 "and SourceSystem == 'Linux' ").format(query_time, resource_name)
+        matches = SHUTDOWN_REGEX_MATCHES if shutdown else RESTART_REGEX_MATCHES
+
+        regex = [("SyslogMessage matches regex '{0}'").format(match) for match in matches]
+        query += ('and ({0}) | sort by EventTime desc '
+                  '| project EventTime, SyslogMessage').format(' or '.join(regex))
+
+        return query
+
+    def gen_windows_events_query(self, shutdown, metric_names, resource_name):
+        query_time = self.params.query_time if self.params.query_time else DEFAULT_LOG_QUERY_TIME_MIN
+        regex = "'.*has initiated the shutdown.*'" if shutdown else "'.*has initiated the restart.*'"
+        return ("search in (Event) 'shutdown' and EventLog == 'System' and EventID == 1074 and "
+                "Computer == '{0}' | where RenderedDescription matches regex {1} "
+                "and TimeGenerated > ago({2}m) | sort by TimeGenerated desc | project TimeGenerated, "
+                "RenderedDescription").format(resource_name, regex, query_time)
+
+    def query_log_metrics(self, token, workspace_id, resource_name, metric_names):
+        token_encoded = urllib.quote_plus(token)
+        headers = {'Authorization': 'Bearer ' + token_encoded, 'Content-Type': 'application/json'}
+
+        query = self.generate_query(metric_names, resource_name)
+
+        data = {'query': query}
+        post_body = json.dumps(data)
+
+        url = ('{0}v1/workspaces/{1}/query').format(LOG_ANALYTICS_URL, workspace_id)
+        rest_response = requests.post(url, headers=headers, data=post_body)
+
+        try:
+            json_replic_events = json.loads(rest_response.text)
+        except ValueError:
+            raise ResultError("Could not parse results from Azure: {0}".format(e))
+
+        metrics = []
+        results = json_replic_events.get('tables', None)
+        if not results:
+            raise ResultError(("The Azure Server returned no results. Ensure your Workspace Id is correct."
+                               "Workspace Id: {0}").format(workspace_id))
+
+        for result in results:
+            rows = result.get('rows', None)
+            if not rows and not self.os_type:
+                raise ResultError(("The Azure Server returned no results.\nWe Requested:\n {0}").format(data))
+            metrics += rows
+
+        return [metrics] if self.os_type else metrics
+
+    def get_metrics(self):
+        log_analytics_token = self.get_token(self.auth_url, self.client_id, self.secret_key, LOG_ANALYTICS_URL)
+        results = self.query_log_metrics(
+            token=log_analytics_token,
+            workspace_id=self.params.workspace_id,
+            resource_name=self.params.resource_name,
+            metric_names=self.metrics.split(','))
+        nagiosmetrics = self.process_query(results)
+        return nagiosmetrics
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource,
+                                   LogAnalyticsMachineEventsSummary(self.params, self.os_type) if self.os_type else
+                                   LogAnalyticsSummary())
+        for metric, threshold_warning, threshold_critical in zip(self.metrics.split(','), self.thresholds_warning,
+                                                                 self.thresholds_critical):
+            check.add(LogAnalyticsContext(metric, threshold_warning, threshold_critical))
+        check.add(LogAnalyticsLinuxMachineEventsContext(LINUX_MACHINE_EVENTS_CONTEXT_NAME,
+                                                        self.thresholds_warning[0], self.thresholds_critical[0]))
+        check.add(LogAnalyticsWindowsMachineEventsContext(WINDOWS_MACHINE_EVENTS_CONTEXT_NAME,
+                                                          self.thresholds_warning[0], self.thresholds_critical[0]))
+        return check
+
+
+class MgmtNetworkConnectivitySummary(nagiosplugin.Summary):
+
+    def __init__(self, params):
+        self.source = params.source_name
+        self.target = params.target_name
+        self.port = params.target_port
+        try:
+            self.max_disp = int(params.max_disp)
+        except ValueError:
+            self.max_disp = DEFAULT_MAX_DISP
+
+    def ok(self, results):
+        result = results[0].metric.value
+        num_hops = len(result.hops)
+        result_status = "  [AZURE OPERATION ONGOING]" if result.retryable_error else ""
+        summary = ("Connection Status = {0}{5}"
+                   "\nProbes Sent = {1}"
+                   "\nProbes Failed = {2}"
+                   "\nAverage Latency = {3}ms"
+                   "\nHop Number = {4}").format(result.connectionStatus, result.probesSent, result.probesFailed,
+                                                result.avgLatencyInMs, num_hops, result_status)
+        if self.max_disp:
+            hopstr = " ---> {0}[:{1}]".format(self.target, self.port)
+            i = 0
+            for hop in reversed(result.hops):
+                if i < self.max_disp:
+                    hopstr = " ---> {0}{1}".format(hop.address, hopstr)
+                    i += 1
+            startstr = "\nHops = {0}{1}" if (i >= num_hops) else "\nHops = {0} ---> ...{1}"
+            summary += startstr.format(self.source, hopstr)
+        return summary
+
+    def problem(self, results):
+        result = results[0].metric.value
+        num_hops = len(result.hops)
+        result_status = "  [AZURE OPERATION ONGOING]" if result.retryable_error else ""
+        summary = ("Connection Status = {0}{4}"
+                   "\nProbes Sent = {1}"
+                   "\nProbes Failed = {2}"
+                   "\nAverage Latency = N/A"
+                   "\nHop Number = {3}").format(result.connectionStatus, result.probesSent, result.probesFailed,
+                                                num_hops, result_status)
+        if self.max_disp:
+            hopstr = " ---> FAILED"
+            i = 0
+            for hop in reversed(result.hops):
+                if i < self.max_disp:
+                    hopstr = " ---> {0}{1}".format(hop.address, hopstr)
+                    i += 1
+            startstr = "\nHops = {0}{1}" if (i >= num_hops) else "\nHops = {0} ---> ...{1}"
+            summary += startstr.format(self.source, hopstr)
+        return summary
+
+
+class MgmtNetworkTroubleshootingSummary(nagiosplugin.Summary):
+
+    def __init__(self, params):
+        try:
+            self.max_disp = int(params.max_disp)
+        except ValueError:
+            self.max_disp = DEFAULT_MAX_DISP
+
+    def ok(self, results):
+        code = results[0].metric.value.code
+        timestamp = results[0].metric.value.end_time
+        result = results[0].metric.value.results[0]
+        summary = ("{0}:"
+                   "\nID = {1}"
+                   "\nSummary = {2}"
+                   "\nTimestamp = {3}").format(code, result.id, result.summary, timestamp)
+        return summary
+
+    def problem(self, results):
+        code = results[0].metric.value.code
+        timestamp = results[0].metric.value.end_time
+        result = results[0].metric.value.results[0]
+        summary = ("{0}:"
+                   "\nID = {1}"
+                   "\nReason Type = {2}"
+                   "\nSummary = {3}"
+                   "\nTimestamp = {4}").format(code, result.id, result.reason_type, result.summary, timestamp)
+        summary += "\nRecommendations:\n"
+        for index, recom in enumerate(result.recommended_actions, 1):
+            action_uri = "\n       URL = {}".format(recom.action_uri) if recom.action_uri else ""
+            summary += "\n   ({0}) Text = {1}{2}\n".format(index, recom.action_text, action_uri)
+        return summary
+
+
+class MgmtNetworkConnectionMonitorSummary(nagiosplugin.Summary):
+
+    def __init__(self, params):
+        try:
+            self.max_disp = int(params.max_disp)
+        except ValueError:
+            self.max_disp = DEFAULT_MAX_DISP
+
+    def ok(self, results):
+        mon_list = results[0].metric.value
+        summary = "{0} Connection Monitors Running".format(len(mon_list))
+        return summary
+
+    def problem(self, results):
+        mon_list = results[0].metric.value
+        if results[0].state == nagiosplugin.Unknown:
+            summary = results[0].hint
+        else:
+            summary = ""
+            num_stopped = 0
+            num_not_started = 0
+            index = 0
+            for monitor in mon_list:
+                display = False
+                if monitor.monitoring_status == WARNING_MONITOR_STATES['stopped']:
+                    num_stopped += 1
+                    display = True
+                elif monitor.monitoring_status == WARNING_MONITOR_STATES['notstarted']:
+                    num_not_started += 1
+                    display = True
+                if (index < self.max_disp) and display:
+                    summary += ("\n   Monitoring Status = {0}"
+                                "\n   Name = {1}"
+                                "\n   Source/Destination[:port] = {2}/{3}[:{4}]"
+                                "\n   Provisioning State = {5}\n").format(monitor.monitoring_status,
+                                                                          monitor.name,
+                                                                          monitor.source.resource_id
+                                                                          .split('virtualMachines/')[1],
+                                                                          monitor.destination.address,
+                                                                          monitor.destination.port,
+                                                                          monitor.provisioning_state)
+                    index += 1
+            num_running = len(mon_list) - num_stopped - num_not_started
+            summary = ("{0} Stopped, {1} Not Started, "
+                       "{2} Running, displaying first {3}:\n{4}").format(num_stopped, num_not_started, num_running,
+                                                                         self.max_disp, summary)
+        return summary
+
+
+class MgmtNetworkSecurityRulesSummary(nagiosplugin.Summary):
+
+    def __init__(self, params):
+        try:
+            self.max_disp = int(params.max_disp)
+        except ValueError:
+            self.max_disp = DEFAULT_MAX_DISP
+
+    def rule_string(self, nics):
+        summary = ""
+        index = 1
+        num_default = 0
+        num_rules = 0
+        for nic in nics:
+            for rule in nic.security_rule_associations.effective_security_rules:
+                display = True
+                num_rules += 1
+                if 'Default' in rule.name:
+                    num_default += 1
+                    display = False
+                if index <= self.max_disp and display:
+                    source_adds = ','.join(rule.source_address_prefixes)
+                    source_ports = ','.join(rule.source_port_ranges)
+                    dest_adds = ','.join(rule.destination_address_prefixes)
+                    dest_ports = ','.join(rule.destination_port_ranges)
+                    summary += ("\n\n{0} Rule {1}:"
+                                "\n   NIC = {2}"
+                                "\n   Priority = {3}"
+                                "\n   Name = {4}"
+                                "\n   Protocol = {5}"
+                                "\n   Source Addresses[Port Range] = {6} [{7}]"
+                                "\n   Destination Addresses[Port Range] = {8} [{9}]"
+                                "\n   Action = {10}").format(rule.direction.upper(), index,
+                                                             nic.id.split('networkInterfaces/')[1],
+                                                             rule.priority, rule.name.replace('UserRule_', ''),
+                                                             rule.protocol.upper(), source_adds, source_ports,
+                                                             dest_adds, dest_ports,
+                                                             rule.access.upper())
+                    index += 1
+        return (summary, num_rules, num_default)
+
+    def ok(self, results):
+        (rule_string, length, num_default) = self.rule_string(results[0].metric.value.network_interfaces)
+        summary = ("{0} Security Rules applied ({1} Default, {2} Custom)."
+                   "\nEffective Security Rules (excluding Defaults):").format(length, num_default,
+                                                                              length - num_default)
+        summary += rule_string
+        return summary
+
+    def problem(self, results):
+        if results[0].state == nagiosplugin.Critical:
+            summary = results[0].hint
+        else:
+            (rule_string, length, num_default) = self.rule_string(results[0].metric.value.network_interfaces)
+            threshold = results[0].metric.contextobj.warning
+            summary = ("{0} Security Rules applied  ({1} Default, {2} Custom) - "
+                       "this is not equal to the set threshold ({3})."
+                       "\nEffective Security Rules (excluding Defaults):").format(length, num_default,
+                                                                                  length - num_default,
+                                                                                  threshold)
+            summary += rule_string
+        return summary
+
+
+class MgmtNetworkConnectivityContext(nagiosplugin.Context):
+
+    def describe(self, metric):
+        return "Connectivity Check from the Source VM to the Target VM"
+
+    def evaluate(self, metric, resource):
+        hint = None
+        if metric.value.connectionStatus == CONNECTIVITY_STATES['reachable']:
+            state = nagiosplugin.Ok
+        elif metric.value.connectionStatus == CONNECTIVITY_STATES['unreachable']:
+            state = nagiosplugin.Critical
+            hint = "Received 'Unreachable' Connection Status"
+        else:
+            state = nagiosplugin.Unknown
+            hint = "Connectivity Status Unknown"
+        return nagiosplugin.Result(state, hint=hint, metric=metric)
+
+    def performance(self, metric, resource):
+        data = None
+        # To be added again when OP-27078 is done
+        #if metric.value.connectionStatus == CONNECTIVITY_STATES['reachable']:
+        #    data = nagiosplugin.Performance('Avg_Latency', metric.value.avgLatencyInMs, 'ms')
+        return data
+
+
+class MgmtNetworkTroubleshootingContext(nagiosplugin.Context):
+
+    def describe(self, metric):
+        return "Latest Troubleshooting results for the specified Virtual Network Gateway"
+
+    def evaluate(self, metric, resource):
+        hint = None
+        if metric.value.code == TROUBLESHOOTING_STATES['healthy']:
+            state = nagiosplugin.Ok
+        elif metric.value.code == TROUBLESHOOTING_STATES['unhealthy']:
+            state = nagiosplugin.Critical
+            hint = "Received 'Unhealthy' Troubleshooting Code"
+        else:
+            state = nagiosplugin.Unknown
+            hint = "Troubleshooting Result Unknown"
+        return nagiosplugin.Result(state, hint=hint, metric=metric)
+
+
+class MgmtNetworkConnectionMonitorContext(nagiosplugin.Context):
+
+    def describe(self, metric):
+        return "List of the Connection Monitors in the specified Network Watcher"
+
+    def evaluate(self, metric, resource):
+        hint = None
+        mon_list = metric.value
+        if mon_list:
+            warning = False
+            for monitor in mon_list:
+                if (monitor.monitoring_status in WARNING_MONITOR_STATES.values()):
+                    warning = True
+            state = nagiosplugin.Warn if warning else nagiosplugin.Ok
+        else:
+            state = nagiosplugin.Unknown
+            hint = "Network Watcher has no Connection Monitors"
+        return nagiosplugin.Result(state, hint=hint, metric=metric)
+
+
+class MgmtNetworkSecurityRulesContext(nagiosplugin.Context):
+
+    def __init__(self, name, warning, critical):
+        super(MgmtNetworkSecurityRulesContext, self).__init__(name)
+        self.warning = int(warning or 0)
+
+    def describe(self, metric):
+        return "List of the Network Security Rules applied on a Virtual Machine"
+
+    def evaluate(self, metric, resource):
+        hint = None
+        length = len(metric.value.network_interfaces[0].security_rule_associations.effective_security_rules)
+        if not length:
+            state = nagiosplugin.Critical
+            hint = "Virtual Machine has no security rules applied"
+        elif length != self.warning:
+            state = nagiosplugin.Warn
+        else:
+            state = nagiosplugin.Ok
+
+        return nagiosplugin.Result(state, hint=hint, metric=metric)
+
+
+class MgmtNetwork(Plugin):
+
+    def __init__(self, *args):
+        super(MgmtNetwork, self).__init__(*args)
+
+        mapping = {
+            'Az.Network.Watcher.VM.Connectivity': {
+                'provider_length': MGMT_NETWORK_PROVIDER_LEN_CONNECTIVITY_CHECK,
+                'params': namedtuple('ConnectivityParams',
+                                     ('network_watcher_group_name', 'network_watcher_name', 'source_group',
+                                      'source_name', 'target_group', 'target_name', 'target_port', 'max_disp')),
+                'check': self.connectivity_check,
+                'context': MgmtNetworkConnectivityContext,
+                'summary': MgmtNetworkConnectivitySummary
+            },
+            'Az.Network.Watcher.VNG.Troubleshooting': {
+                'provider_length': MGMT_NETWORK_PROVIDER_LEN_TROUBLESHOOTING,
+                'params': namedtuple('TroubleshootingParams',
+                                     ('network_watcher_group_name', 'network_watcher_name', 'resource_name',
+                                      'storage_acc_group', 'storage_acc_name', 'blob_url', 'max_disp')),
+                'check': self.troubleshooting,
+                'context': MgmtNetworkTroubleshootingContext,
+                'summary': MgmtNetworkTroubleshootingSummary
+            },
+            'Az.Network.Watcher.Connection.Monitors': {
+                'provider_length': MGMT_NETWORK_PROVIDER_LEN_CONNECTION_MONITORS,
+                'params': namedtuple('ConnectionMonitorParams',
+                                     ('network_watcher_group_name', 'network_watcher_name', 'max_disp')),
+                'check': self.connection_monitors,
+                'context': MgmtNetworkConnectionMonitorContext,
+                'summary': MgmtNetworkConnectionMonitorSummary
+            },
+            'Az.Network.Watcher.VM.Security.Rules': {
+                'provider_length': MGMT_NETWORK_PROVIDER_LEN_SECURITY_RULES,
+                'params': namedtuple('SecurityRulesParams',
+                                     ('network_watcher_group_name', 'network_watcher_name', 'resource_name',
+                                      'max_disp')),
+                'check': self.security_rules,
+                'context': MgmtNetworkSecurityRulesContext,
+                'summary': MgmtNetworkSecurityRulesSummary
+            }
+        }
+
+        paramslist = self.provider.split(',')
+        try:
+            if len(paramslist) != mapping[self.mode]['provider_length']:
+                raise ParamError("Provider string should contain exactly {0} variables, not {1}"
+                                 .format(mapping[self.mode]['provider_length'], len(paramslist)))
+
+            self.params = mapping[self.mode]['params']._make(paramslist)
+            self.check_method = mapping[self.mode]['check']
+            self.context = mapping[self.mode]['context']
+            self.summary = mapping[self.mode]['summary']
+        except KeyError:
+            raise ParamError("Invalid template configuration {}".format(self.mode))
+
+    def connectivity_check(self, client):
+        source_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/Microsoft.Compute/virtualMachines/{2}'
+        ).format(self.subscription_id, self.params.source_group, self.params.source_name)
+
+        target_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/Microsoft.Compute/virtualMachines/{2}'
+        ).format(self.subscription_id, self.params.target_group, self.params.target_name)
+
+        auth_url = '{0}{1}/oauth2/token'.format(MICROSOFT_API_URL, self.tenant_id)
+        response = requests.post(auth_url, data={'grant_type': 'client_credentials',
+                                                 'client_id': '{}'.format(self.client_id),
+                                                 'client_secret': '{}'.format(self.secret_key),
+                                                 'resource': AZURE_MGMT_URL})
+        try:
+            token = json.loads(response.text)['access_token']
+        except ValueError:
+            raise ResultError("Failed to retrieve authentication token from auth response")
+
+        file_suffix = '_{0}_{1}_{2}_{3}_{4}_{5}_{6}.tmp'.format(self.subscription_id, self.tenant_id,
+                                                                self.params.source_group, self.params.source_name,
+                                                                self.params.target_group, self.params.target_name,
+                                                                self.params.target_port)
+
+        location_path = '{0}{1}'.format(DEFAULT_TMP_CONNECTIVITY_LOCATION, file_suffix)
+        path = '{0}{1}'.format(DEFAULT_TMP_CONNECTIVITY_DATA, file_suffix)
+
+        finished = False
+        retryable_error = False
+        no_url = False
+        url = None
+        check = None
+
+        try:
+            with open(location_path, 'r') as tmpfile:
+                url = tmpfile.read()
+        except IOError as e:
+            if e.errno != errno.ENOENT:
+                raise e
+            no_url = True
+
+        if not no_url:
+            response = requests.get(url, headers={'Authorization': 'Bearer {}'.format(token)})
+            if response.status_code == 200:
+                finished = True
+                check = response.text
+            elif response.status_code == 404:
+                no_url = True
+            elif response.status_code != 202:
+                raise ResultError(("Response {0}: Something went wrong when "
+                                   "requesting the connectivity results from Azure: {1}").format(response.status_code,
+                                                                                                 response.text))
+
+        if no_url or finished:
+            check_url = ('{0}subscriptions/{1}'
+                         '/resourceGroups/{2}/providers/Microsoft.Network/networkWatchers/{3}'
+                         '/connectivityCheck?api-version={4}').format(AZURE_MGMT_URL, self.subscription_id,
+                                                                      self.params.network_watcher_group_name,
+                                                                      self.params.network_watcher_name,
+                                                                      CONNECTIVITY_API_VERSION)
+            response = requests.post(check_url,
+                                     headers={
+                                            'Authorization': 'Bearer {}'.format(token),
+                                            'Content-Type': 'application/json'
+                                     },
+                                     json={
+                                         'source': {
+                                             'resourceId': source_id
+                                         },
+                                         'destination': {
+                                             'resourceId': target_id,
+                                             'port': self.params.target_port
+                                         }
+                                     })
+            if response.status_code == 202:
+                url = response.headers['location']
+            elif response.status_code == 429:   # Azure retryable error is 429 - an operation is still ongoing
+                retryable_error = True          # so we should return the previous results and inform user
+            else:
+                resjson = response.json()
+                raise ResultError(("Response {0} - Could not retrieve async " +
+                                   "operation info from Azure ({1}): {2}").format(response.status_code,
+                                                                                  resjson['error']['code'],
+                                                                                  resjson['error']['message']))
+
+            try:
+                with open(location_path, 'w') as tmpfile:
+                    tmpfile.write(url)
+            except IOError as e:
+                raise ResultError("Failed to update connectivity results location url: {}".format(e))
+
+        if retryable_error or (not finished):
+            try:
+                with open(path, 'r') as tmpfile:
+                    data = tmpfile.read()
+            except IOError as e:
+                if e.errno != errno.ENOENT:
+                    raise e
+                raise AssumedOK("No previous cached results available")
+            try:
+                data = json.loads(data)
+            except ValueError as e:
+                raise ResultError("Could not retrieve previous connectivity results from tmp file: {}".format(e))
+
+            hops = data['hops']
+            hoptuple = namedtuple('Hop', hops[0].keys())
+            data['hops'] = [hoptuple(**item) for item in hops]
+            data['retryable_error'] = retryable_error
+            result = namedtuple('Connectivity', data.keys())(**data)
+            timenow = datetime.datetime.utcnow()
+            timestamp = datetime.datetime.strptime(result.end_time, '%Y-%m-%d %H:%M:%S UTC')
+            check_interval = int(self.check_interval) if self.check_interval is not None else DEFAULT_CHECK_INTERVAL
+            cutoff = timenow - datetime.timedelta(seconds=max(2*check_interval, MIN_CACHE_TIME_SECONDS))
+            if cutoff > timestamp:
+                raise AssumedOK("Cached results are too old, waiting for new results")
+        else:
+            try:
+                result = json.loads(check)
+            except ValueError as e:
+                raise ResultError("Could not parse results from Azure: {}".format(e))
+            hops = result['hops']
+            hoptuple = namedtuple('Hop', hops[0].keys())
+            result['hops'] = [hoptuple(**item) for item in hops]
+            timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+            result['end_time'] = timestamp
+            result['retryable_error'] = retryable_error
+            result = namedtuple('Connectivity', result.keys())(**result)
+
+            hops = [{'address': hop.address} for hop in result.hops]
+
+            latency = result.avgLatencyInMs if result.connectionStatus == CONNECTIVITY_STATES['reachable'] else None
+
+            connectivity_data_dict = {
+                            'end_time': timestamp,
+                            'connectionStatus': result.connectionStatus,
+                            'probesSent': result.probesSent,
+                            'probesFailed': result.probesFailed,
+                            'avgLatencyInMs': latency,
+                            'hops': hops
+                    }
+
+            connectivity_data = json.dumps(connectivity_data_dict)
+
+            try:
+                with open(path, 'w') as tmpfile:
+                    tmpfile.write(connectivity_data)
+            except IOError as e:
+                raise ResultError("Could not write to connectivity result cache: {}".format(e))
+
+        return result
+
+    def troubleshooting(self, client):
+        target_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/Microsoft.Compute/virtualNetworkGateways/{2}'
+        ).format(self.subscription_id, self.resource_group, self.params.resource_name)
+
+        storage_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/Microsoft.Storage/storageAccounts/{2}'
+        ).format(self.subscription_id, self.params.storage_acc_group, self.params.storage_acc_name)
+
+        params = TroubleshootingParameters(target_resource_id=target_id, storage_id=storage_id,
+                                           storage_path=self.params.blob_url)
+
+        try:
+            poller = client.network_watchers.get_troubleshooting_result(self.params.network_watcher_group_name,
+                                                                        self.params.network_watcher_name, target_id)
+        except CloudError as e:
+            client.network_watchers.get_troubleshooting(self.params.network_watcher_group_name,
+                                                        self.params.network_watcher_name, params)
+            raise ResultError("Could not retrieve results poller from Azure: {}".format(e))
+
+        file_suffix = '_{0}_{1}_{2}_{3}.tmp'.format(self.subscription_id, self.tenant_id, self.resource_group,
+                                                    self.params.resource_name)
+
+        path = '{0}{1}'.format(DEFAULT_TMP_TROUBLESHOOTING, file_suffix)
+
+        if not poller.done():
+            try:
+                with open(path, 'r') as tmpfile:
+                    data = tmpfile.read()
+            except IOError as e:
+                if e.errno != errno.ENOENT:
+                    raise e
+                raise AssumedOK("No previous cached results available")
+            try:
+                data = json.loads(data)
+            except ValueError as e:
+                raise ResultError("Could not retrieve previous troubleshooting results from tmp file: {}".format(e))
+            for result in data['results']:
+                result['recommended_actions'] = [namedtuple('RecommendedAction', item.keys())(**item) for item
+                                                 in
+                                                 result['recommended_actions']]
+            data['results'] = [namedtuple('TroubleshootingResult', item.keys())(**item) for item in
+                               data['results']]
+            result = namedtuple('Troubleshooting', data.keys())(**data)
+            timenow = datetime.datetime.utcnow()
+            timestamp = datetime.datetime.strptime(result.end_time, '%Y-%m-%d %H:%M:%S UTC')
+            check_interval = int(self.check_interval) if self.check_interval is not None else DEFAULT_CHECK_INTERVAL
+            cutoff = timenow - datetime.timedelta(seconds=max(2*check_interval, MIN_CACHE_TIME_SECONDS))
+            if cutoff > timestamp:
+                raise AssumedOK("Cached results are too old, waiting for new results")
+        else:
+            result = poller.result()
+            end_time = result.end_time.strftime('%Y-%m-%d %H:%M:%S UTC')
+            result.end_time = end_time
+
+            resultlist = []
+            for item in result.results:
+                actionlist = [{'action_text': action.action_text, 'action_uri': action.action_uri}
+                              for action in item.recommended_actions]
+
+                resultdict = {
+                                'summary': item.summary,
+                                'id': item.id,
+                                'reason_type': item.reason_type,
+                                'recommended_actions': actionlist
+                            }
+                resultlist.append(resultdict)
+
+            troubleshooting_data_dict = {
+                        'code': result.code,
+                        'end_time': end_time,
+                        'results': resultlist
+                    }
+
+            troubleshooting_data = json.dumps(troubleshooting_data_dict)
+
+            try:
+                with open(path, 'w') as tmpfile:
+                    tmpfile.write(troubleshooting_data)
+            except IOError as e:
+                raise ResultError("Could not write to troubleshooting result cache: {}".format(e))
+
+            client.network_watchers.get_troubleshooting(self.params.network_watcher_group_name,
+                                                        self.params.network_watcher_name, params)
+        return result
+
+    def connection_monitors(self, client):
+        paged = client.connection_monitors.list(self.params.network_watcher_group_name,
+                                                self.params.network_watcher_name)
+        return list(paged)
+
+    def security_rules(self, client):
+        resource_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/Microsoft.Compute/virtualMachines/{2}'
+        ).format(self.subscription_id, self.resource_group, self.params.resource_name)
+
+        poller = client.network_watchers.get_vm_security_rules(self.params.network_watcher_group_name,
+                                                               self.params.network_watcher_name, resource_id)
+        return poller.result()
+
+    def get_metrics(self):
+
+        try:
+            credentials = ServicePrincipalCredentials(
+                client_id=self.client_id,
+                secret=self.secret_key,
+                tenant=self.tenant_id
+            )
+        except AuthenticationError as e:
+            raise ResultError(e.inner_exception.error_response['error_description'])
+
+        client = NetworkManagementClient(
+            credentials,
+            self.subscription_id
+        )
+
+        result = self.check_method(client)
+
+        return nagiosplugin.Metric('mgmt_network', result)
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource, self.summary(self.params))
+        check.add(self.context('mgmt_network', self.thresholds_warning[0], self.thresholds_critical[0]))
+        return check
+
+
+class ModeUsage(object):
+
+    def __init__(self, metrics, provider, unit, aggregation, plugin_type, thresholds_warning, thresholds_critical,
+                 timespan, interval):
+        self.metrics = metrics
+        self.provider = provider
+        self.unit = unit
+        self.aggregation = aggregation
+        self.plugin_type = plugin_type
+        self.thresholds_warning = thresholds_warning
+        self.thresholds_critical = thresholds_critical
+        self.timespan = timespan
+        self.interval = interval
+
+
+class ResourceVariable(object):
+
+    def __init__(self, name, default_value, arguments=None):
+        self.name = name
+        self.default_value = default_value
+        self.arguments = arguments or []
+
+
+class ResourceArgument(object):
+
+    def __init__(self, short_param, long_param, help, resource_key):
+        self.short_param = short_param
+        self.long_param = long_param
+        self.help = help
+        self.resource_key = resource_key
+        self.arg_name = long_param.lstrip('--').replace('-', '_')
+        self.value = None
+
+
+def expand_provider(provider_template):
+    # Expands the resource macros in the provider url.
+    provider_str = provider_template
+    for variable in RESOURCE_VARIABLES:
+        for argument in variable.arguments:
+            key = '{' + argument.resource_key + '}'
+            if key in provider_str:
+                if argument.value is None:
+                    raise ParamError("Missing parameter: '{}' or '{}'"
+                                     .format(argument.short_param, argument.long_param))
+                provider_str = provider_str.replace(key, argument.value)
+    return provider_str
+
+
+def run_check(args, mode_usage):
+
+    mode_thresholds_warning = mode_usage.thresholds_warning.split(',')
+    if args.warning:
+        thresholds_warning = str(args.warning).split(',')
+        if len(thresholds_warning) != len(mode_thresholds_warning):
+            raise ParamError("Number of thresholds must match number of metrics ({0}) : '{1}'"
+                             .format(len(mode_thresholds_warning), thresholds_warning))
+    else:
+        thresholds_warning = mode_thresholds_warning
+
+    mode_thresholds_critical = mode_usage.thresholds_critical.split(',')
+    if args.critical:
+        thresholds_critical = str(args.critical).split(',')
+    else:
+        thresholds_critical = mode_thresholds_critical
+
+    num_metrics = len(mode_usage.metrics.split(','))
+
+    if (len(thresholds_warning) != num_metrics) or (len(thresholds_critical) != num_metrics):
+        raise ParamError("Number of thresholds must match number of metrics ({0}) : 'w = {1}, c = {2}'"
+                         .format(num_metrics, thresholds_warning, thresholds_critical))
+
+    try:
+        check_class = PLUGIN_MAPPING[mode_usage.plugin_type](args.client_id, args.secret_key, args.tenant_id,
+                                                             args.subscription_id, args.resource_group,
+                                                             mode_usage.provider, mode_usage.metrics,
+                                                             mode_usage.aggregation, mode_usage.unit,
+                                                             mode_usage.timespan, mode_usage.interval,
+                                                             thresholds_warning, thresholds_critical, args.mode,
+                                                             args.check_interval)
+    except KeyError:
+        raise ParamError("Invalid Plugin: {}".format(mode_usage.plugin_type))
+
+    check = check_class.get_check(Metric(check_class))
+
+    check.main()
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Monitors Microsoft Azure.")
+    parser.add_argument('-ci', '--check_interval', help="Servicecheck check interval")
+    parser.add_argument('-m', '--mode', help="The mode.", required=True)
+    parser.add_argument('-s', '--subscription-id', help="The subscription ID.", required=True)
+    parser.add_argument('-C', '--client-id', help="The client ID.", required=True)
+    parser.add_argument('-S', '--secret-key', help="The client secret key.", required=True)
+    parser.add_argument('-t', '--tenant-id', help="The tenant ID.", required=True)
+    parser.add_argument('-w', '--warning', help="The warning levels.")
+    parser.add_argument('-c', '--critical', help="The critical levels.")
+    for variable in RESOURCE_VARIABLES:
+        for arg in variable.arguments:
+            parser.add_argument(arg.short_param, arg.long_param, help=arg.help)
+    return parser.parse_args()
+
+
+def main():
+    args = get_args()
+    try:
+        mode_usage = MODE_MAPPING[args.mode]
+    except KeyError:
+        raise ParamError("Invalid mode: '{}'".format(args.mode))
+
+    # Update resource values from args
+    for variable in RESOURCE_VARIABLES:
+        for argument in variable.arguments:
+            argument.value = getattr(args, argument.arg_name)
+
+    mode_usage.provider = expand_provider(mode_usage.provider)
+    run_check(args, mode_usage)
+
+
+PLUGIN_MAPPING = {
+    'mgmt_monitor': MgmtMonitor,
+    'log_analytics': LogAnalytics,
+    'mgmt_network': MgmtNetwork,
+}
+
+
+MODE_MAPPING = {
+    'Az.Net.LB.Availability':
+        ModeUsage('VipAvailability,DipAvailability',
+                  'Microsoft.Network/loadBalancers/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Net.LB.Packets':
+        ModeUsage('PacketCount,SYNCount',
+                  'Microsoft.Network/loadBalancers/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Net.LB.Bytes.Count':
+        ModeUsage('ByteCount',
+                  'Microsoft.Network/loadBalancers/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Net.DNS.Query.Volume':
+        ModeUsage('QueryVolume',
+                  'Microsoft.Network/dnszones/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '14400', '3600'),
+    'Az.Net.DNS.Record.Count':
+        ModeUsage('RecordSetCount',
+                  'Microsoft.Network/dnszones/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Maximum', 'mgmt_monitor',
+                  '', '',
+                  '14400', '3600'),
+    'Az.Net.DNS.Record.Capacity':
+        ModeUsage('RecordSetCapacityUtilization',
+                  'Microsoft.Network/dnszones/{AZURE_RESOURCE_NAME}',
+                  'Percent', 'Maximum', 'mgmt_monitor',
+                  '70', '90',
+                  '14400', '3600'),
+    'Az.Analysis.Service.Server.QPU':
+        ModeUsage('qpu_metric',
+                  'Microsoft.AnalysisServices/servers/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Analysis.Service.Server.Memory':
+        ModeUsage('memory_metric,MemoryUsage,Quota',
+                  'Microsoft.AnalysisServices/servers/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  ',,', ',,',
+                  '300', '300'),
+    'Az.Analysis.Service.Server.Connections':
+        ModeUsage('CurrentConnections,TotalConnectionRequests,TotalConnectionFailures',
+                  'Microsoft.AnalysisServices/servers/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Average', 'mgmt_monitor',
+                  ',,', ',,',
+                  '300', '300'),
+    'Az.Analysis.Service.Server.Sessions':
+        ModeUsage('CurrentUserSessions',
+                  'Microsoft.AnalysisServices/servers/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.APS.Request':
+        ModeUsage('TotalRequests,SuccessfulRequests,UnauthorizedRequests,FailedRequests',
+                  'Microsoft.ApiManagement/service/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  ',,,', ',,,',
+                  '300', '300'),
+    'Az.APS.Duration':
+        ModeUsage('Duration',
+                  'Microsoft.ApiManagement/service/{AZURE_RESOURCE_NAME}',
+                  'Milliseconds', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.APS.Capacity':
+        ModeUsage('Capacity',
+                  'Microsoft.ApiManagement/service/{AZURE_RESOURCE_NAME}',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  '70', '90',
+                  '300', '300'),
+    'Az.Storage.Acc.Capacity':
+        ModeUsage('UsedCapacity',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Availability':
+        ModeUsage('Availability',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  '70', '90',
+                  '300', '300'),
+    'Az.Storage.Acc.Bytes':
+        ModeUsage('Ingress,Egress',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Latency':
+        ModeUsage('SuccessServerLatency,SuccessE2ELatency',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}',
+                  'Milliseconds', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Blob.Capacity':
+        ModeUsage('BlobCapacity',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/blobServices/default',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Blob.Availability':
+        ModeUsage('Availability',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/blobServices/default',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  '70', '90',
+                  '300', '300'),
+    'Az.Storage.Acc.Blob.Count':
+        ModeUsage('BlobCount,ContainerCount',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/blobServices/default',
+                  'Count', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Blob.Bytes':
+        ModeUsage('Ingress,Egress',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/blobServices/default',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Blob.Latency':
+        ModeUsage('SuccessServerLatency,SuccessE2ELatency',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/blobServices/default',
+                  'Milliseconds', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Table.Capacity':
+        ModeUsage('TableCapacity',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/tableServices/default',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Table.Availability':
+        ModeUsage('Availability',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/tableServices/default',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  '70', '90',
+                  '300', '300'),
+    'Az.Storage.Acc.Table.Count':
+        ModeUsage('TableCount,TableEntityCount',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/tableServices/default',
+                  'Count', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Table.Bytes':
+        ModeUsage('Ingress,Egress',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/tableServices/default',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Table.Latency':
+        ModeUsage('SuccessServerLatency,SuccessE2ELatency',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/tableServices/default',
+                  'Milliseconds', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Queue.Capacity':
+        ModeUsage('QueueCapacity',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/queueServices/default',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Queue.Availability':
+        ModeUsage('Availability',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/queueServices/default',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  '70', '90',
+                  '300', '300'),
+    'Az.Storage.Acc.Queue.Count':
+        ModeUsage('QueueCount,QueueMessageCount',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/queueServices/default',
+                  'Count', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '3600', '3600'),
+    'Az.Storage.Acc.Queue.Bytes':
+        ModeUsage('Ingress,Egress',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/queueServices/default',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.Queue.Latency':
+        ModeUsage('SuccessServerLatency,SuccessE2ELatency',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/queueServices/default',
+                  'Milliseconds', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.File.Capacity':
+        ModeUsage('FileCapacity',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/fileServices/default',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '3600', '3600'),
+    'Az.Storage.Acc.File.Availability':
+        ModeUsage('Availability',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/fileServices/default',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  '70', '90',
+                  '300', '300'),
+    'Az.Storage.Acc.File.Count':
+        ModeUsage('FileCount,FileShareCount',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/fileServices/default',
+                  'Count', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '3600', '3600'),
+    'Az.Storage.Acc.File.Bytes':
+        ModeUsage('Ingress,Egress',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/fileServices/default',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Storage.Acc.File.Latency':
+        ModeUsage('SuccessServerLatency,SuccessE2ELatency',
+                  'Microsoft.Storage/StorageAccounts/{AZURE_RESOURCE_NAME}/fileServices/default',
+                  'Milliseconds', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Net.VNG.Tunnel.Bandwidth':
+        ModeUsage('TunnelAverageBandwidth',
+                  'Microsoft.Network/virtualNetworkGateways/{AZURE_RESOURCE_NAME}',
+                  'BytesPerSecond', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Net.VNG.Tunnel.Bytes':
+        ModeUsage('TunnelEgressBytes,TunnelIngressBytes',
+                  'Microsoft.Network/virtualNetworkGateways/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Net.VNG.Tunnel.Packets':
+        ModeUsage('TunnelEgressPackets,TunnelIngressPackets',
+                  'Microsoft.Network/virtualNetworkGateways/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.App.Service.Plan.Percentages':
+        ModeUsage('CpuPercentage,MemoryPercentage',
+                  'Microsoft.Web/serverfarms/{AZURE_RESOURCE_NAME}',
+                  'Percent', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.App.Service.Plan.Queue':
+        ModeUsage('DiskQueueLength,HttpQueueLength',
+                  'Microsoft.Web/serverfarms/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Average', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.App.Service.Plan.Bytes':
+        ModeUsage('BytesReceived,BytesSent',
+                  'Microsoft.Web/serverfarms/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.App.Service.CPU':
+        ModeUsage('CpuTime',
+                  'Microsoft.Web/sites/{AZURE_RESOURCE_NAME}',
+                  'Seconds', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.App.Service.Threads':
+        ModeUsage('Threads',
+                  'Microsoft.Web/sites/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.App.Service.Memory':
+        ModeUsage('MemoryWorkingSet',
+                  'Microsoft.Web/sites/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.App.Service.Bytes':
+        ModeUsage('BytesReceived,BytesSent',
+                  'Microsoft.Web/sites/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  ',', ',',
+                  '300', '300'),
+    'Az.App.Service.Requests':
+        ModeUsage('Requests',
+                  'Microsoft.Web/sites/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.App.Service.Response.Time':
+        ModeUsage('AverageResponseTime',
+                  'Microsoft.Web/sites/{AZURE_RESOURCE_NAME}',
+                  'Seconds', 'Average', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Container.Serv.Kube.CPU':
+        ModeUsage('kube_node_status_allocatable_cpu_cores',
+                  'Microsoft.ContainerService/managedClusters/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Container.Serv.Kube.Memory':
+        ModeUsage('kube_node_status_allocatable_memory_bytes',
+                  'Microsoft.ContainerService/managedClusters/{AZURE_RESOURCE_NAME}',
+                  'Bytes', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Container.Serv.Kube.Condition':
+        ModeUsage('kube_node_status_condition',
+                  'Microsoft.ContainerService/managedClusters/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Container.Serv.Kube.Pods.Ready':
+        ModeUsage('kube_pod_status_ready',
+                  'Microsoft.ContainerService/managedClusters/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_monitor',
+                  '', '',
+                  '300', '300'),
+    'Az.Network.Watcher.VM.Connectivity':
+        ModeUsage('NA',
+                  '{AZURE_NW_RESOURCE_GROUP},{AZURE_NW_RESOURCE_NAME},{AZURE_SOURCE_RESOURCE_GROUP},{AZURE_SOURCE_RESOURCE_NAME},{AZURE_TARGET_RESOURCE_GROUP},{AZURE_TARGET_RESOURCE_NAME},{AZURE_TARGET_PORT},{AZURE_MAX_DISP_NUMBER}',
+                  'NA', 'NA', 'mgmt_network',
+                  '', '',
+                  '300', '300'),
+    'Az.Network.Watcher.VNG.Troubleshooting':
+        ModeUsage('NA',
+                  '{AZURE_NW_RESOURCE_GROUP},{AZURE_NW_RESOURCE_NAME},{AZURE_RESOURCE_NAME},{AZURE_STORAGE_ACC_RESOURCE_GROUP},{AZURE_STORAGE_ACC_RESOURCE_NAME},{AZURE_BLOB_URL},{AZURE_MAX_DISP_NUMBER}',
+                  'NA', 'NA', 'mgmt_network',
+                  '', '',
+                  '300', '300'),
+    'Az.Network.Watcher.Connection.Monitors':
+        ModeUsage('NA',
+                  '{AZURE_NW_RESOURCE_GROUP},{AZURE_NW_RESOURCE_NAME},{AZURE_MAX_DISP_NUMBER}',
+                  'NA', 'NA', 'mgmt_network',
+                  '', '',
+                  '300', '300'),
+    'Az.Network.Watcher.VM.Security.Rules':
+        ModeUsage('NA',
+                  '{AZURE_NW_RESOURCE_GROUP},{AZURE_NW_RESOURCE_NAME},{AZURE_RESOURCE_NAME},{AZURE_MAX_DISP_NUMBER}',
+                  'NA', 'NA', 'mgmt_network',
+                  '', '',
+                  '300', '300'),
+    'Az.Linux.VM.Memory':
+        ModeUsage('% Used Memory,Available MBytes Memory',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Linux.VM.Memory.Swap.Space':
+        ModeUsage('% Used Swap Space',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '300', '300'),
+    'Az.Linux.VM.Processor.Time':
+        ModeUsage('% Processor Time',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '300', '300'),
+    'Az.Linux.VM.Processor.Privileged.Time':
+        ModeUsage('% Privileged Time',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '300', '300'),
+    'Az.Linux.VM.Logical.Disk.Space':
+        ModeUsage('% Used Space,Free Megabytes',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Linux.VM.System.Uptime':
+        ModeUsage('Uptime,Time Since Last Update',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Linux.VM.Heartbeat':
+        ModeUsage('Heartbeat Interval,Time Since Last Report',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Linux.VM.Restarts':
+        ModeUsage('Restarts',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID},{AZURE_LOG_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '86400', '86400'),
+    'Az.Linux.VM.Shutdowns':
+        ModeUsage('Shutdowns',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID},{AZURE_LOG_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '86400', '86400'),
+    'Az.Windows.VM.Memory':
+        ModeUsage('% Committed Bytes In Use,Available Mbytes',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Windows.VM.Processor.Time':
+        ModeUsage('% Processor Time',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '300', '300'),
+    'Az.Windows.VM.Processor.Queue.Length':
+        ModeUsage('Processor Queue Length',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '300', '300'),
+    'Az.Windows.VM.Logical.Disk.Space':
+        ModeUsage('% Free Space,Free Megabytes',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Windows.VM.System.Uptime':
+        ModeUsage('System Up Time,Time Since Last Update',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Windows.VM.Heartbeat':
+        ModeUsage('Heartbeat Interval,Time Since Last Report',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
+                  'NA', 'NA', 'log_analytics',
+                  ',', ',',
+                  '300', '300'),
+    'Az.Windows.VM.Restarts':
+        ModeUsage('Restarts',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID},{AZURE_LOG_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '86400', '86400'),
+    'Az.Windows.VM.Shutdowns':
+        ModeUsage('Shutdowns',
+                  '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID},{AZURE_LOG_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'log_analytics',
+                  '', '',
+                  '86400', '86400'),
+}
+
+
+RESOURCE_VARIABLES = [
+    ResourceVariable('AZURE_STORAGE_ACC_DETAILS', 'Azure Storage Account Details', arguments=[
+        ResourceArgument('-sar', '--storage-acc-group',
+                         'Name of the Azure Storage Account resource group to be monitored',
+                         'AZURE_STORAGE_ACC_RESOURCE_GROUP'),
+        ResourceArgument('-sa', '--storage-acc-name',
+                         'Name of the Azure Storage Account resource to be monitored',
+                         'AZURE_STORAGE_ACC_RESOURCE_NAME'),
+        ResourceArgument('-bl', '--blob-url',
+                         'The URL for the Azure Storage Account Blob',
+                         'AZURE_BLOB_URL'),
+    ]),
+    ResourceVariable('AZURE_CONNECTIVITY_TARGET_DETAILS', 'Azure Connectivity Target Details', arguments=[
+        ResourceArgument('-tr', '--conn-target-group',
+                         'Name of the Azure Connectivity Target resource group to be monitored',
+                         'AZURE_TARGET_RESOURCE_GROUP'),
+        ResourceArgument('-trn', '--conn-target-name',
+                         'Name of the Azure Connectivity Target resource to be monitored',
+                         'AZURE_TARGET_RESOURCE_NAME'),
+        ResourceArgument('-tp', '--conn-target-port',
+                         'The Azure Connectivity Target port',
+                         'AZURE_TARGET_PORT'),
+    ]),
+    ResourceVariable('AZURE_RESOURCE_DETAILS', 'Azure Resource Details', arguments=[
+        ResourceArgument('-r', '--resource-group',
+                         'Name of the Azure resource group to be monitored',
+                         'AZURE_RESOURCE_GROUP'),
+        ResourceArgument('-rn', '--resource-name',
+                         'Name of the Azure resource to be monitored',
+                         'AZURE_RESOURCE_NAME'),
+    ]),
+    ResourceVariable('AZURE_CONNECTIVITY_SOURCE_DETAILS', 'Azure Connectivity Source Details', arguments=[
+        ResourceArgument('-sr', '--conn-source-group',
+                         'Name of the Azure Connectivity Source resource group to be monitored',
+                         'AZURE_SOURCE_RESOURCE_GROUP'),
+        ResourceArgument('-srn', '--conn-source-name',
+                         'Name of the Azure Connectivity Source resource to be monitored',
+                         'AZURE_SOURCE_RESOURCE_NAME'),
+    ]),
+    ResourceVariable('AZURE_NETWORK_WATCHER_DETAILS', 'Azure Network Watcher Details', arguments=[
+        ResourceArgument('-nr', '--network-watcher-group',
+                         'Name of the Azure Network resource group to be monitored',
+                         'AZURE_NW_RESOURCE_GROUP'),
+        ResourceArgument('-nn', '--network-watcher-name',
+                         'Name of the Azure Network resource to be monitored',
+                         'AZURE_NW_RESOURCE_NAME'),
+        ResourceArgument('-md', '--max-display-number',
+                         'The maxmimum number of list items to display for Network Watcher Service Checks',
+                         'AZURE_MAX_DISP_NUMBER'),
+    ]),
+    ResourceVariable('AZURE_LOG_ANALYTICS_DETAILS', 'Azure Log Analytics Details', arguments=[
+        ResourceArgument('-W', '--workspace-id',
+                         'The Workspace ID for Log Analytics',
+                         'AZURE_WORKSPACE_ID'),
+        ResourceArgument('-lt', '--log-timespan',
+                         'The Timespan for counting VM Restart and Shutdown events, in minutes',
+                         'AZURE_LOG_QUERY_TIMESPAN'),
+    ]),
+]
+
+
+if __name__ == '__main__':
+    try:
+        main()
+        exit(0)
+    except AssumedOK as e:
+        e.message = e.message.replace('|', '\pipe')
+        print e.message
+        exit(0)
+    except ResultError as e:
+        e.message = e.message.replace('|', '\pipe')
+        print e.message
+        exit(1)
+    except ParamError as e:
+        e.message = e.message.replace('|', '\pipe')
+        print e.message
+        exit(3)
+    except Exception as e:
+        print e
+        exit(1)
+    except KeyboardInterrupt:
+        exit(1)
