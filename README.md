@@ -23,6 +23,8 @@ This Opspack allows you to monitor the performance metrics for Windows virtual m
 
 * Ensure your Opsview Monitor version is newer than 07 September 2018. Check [Opsview Release Notes](https://knowledge.opsview.com/v6.0-EA/docs/whats-new) for the latest version of Opsview Monitor.
 
+## Known Issues
+* **Performance Metrics are not graphed for Azure - Linux VM - Restarts and Azure - Linux VM - Shutdowns.**
 
 ## Setup Azure for Monitoring
 
