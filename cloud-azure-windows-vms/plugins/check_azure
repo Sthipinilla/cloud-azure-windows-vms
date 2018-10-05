@@ -124,6 +124,8 @@ UNITS = {'Count': '', 'Percent': '%', 'Seconds': 's', 'Milliseconds': 'ms'}
 MICROSOFT_API_URL = 'https://login.microsoftonline.com/'
 AZURE_MGMT_URL = 'https://management.azure.com/'
 
+AUTHENTICATION_EXCEPTIONS = ['invalid_client', 'unauthorized_client']
+
 
 class ParamError(Exception):
     pass
@@ -143,7 +145,6 @@ def convert_seconds(count_seconds):
     mins = (count_seconds - (days * DAY) - (hours * HOUR)) // MINUTE
     seconds = (count_seconds - (days * DAY) - (hours * HOUR) - (mins * MINUTE))
 
-    value = ''
     unit = ''
     if days:
         value = "{0:.0f}d {1:.0f}h {2:.0f}m {3:.0f}s".format(days, hours, mins, seconds)
@@ -204,6 +205,23 @@ class Plugin(object):
             self.mode = mode
             self.check_interval = check_interval
 
+    def get_credentials(self):
+        try:
+            return ServicePrincipalCredentials(
+                client_id=self.client_id,
+                secret=self.secret_key,
+                tenant=self.tenant_id
+            )
+        except AuthenticationError as e:
+            if e.inner_exception.error_response['error'] in AUTHENTICATION_EXCEPTIONS:
+                description = "Error validating Client Credentials. Invalid Client ID or Client Secret Key."
+            else:
+                try:
+                    description = e.inner_exception.error_response['error_description']
+                except Exception:
+                    raise e
+            raise ResultError(description)
+
 
 class MgmtMonitorSummary(nagiosplugin.Summary):
 
@@ -257,15 +275,6 @@ class MgmtMonitor(Plugin):
         return name
 
     def get_metrics(self):
-        try:
-            credentials = ServicePrincipalCredentials(
-                client_id=self.client_id,
-                secret=self.secret_key,
-                tenant=self.tenant_id
-            )
-        except AuthenticationError as e:
-            raise ResultError(e.inner_exception.error_response['error_description'])
-
         resource_id = (
             '/subscriptions/{0}/'
             'resourceGroups/{1}/'
@@ -274,7 +283,7 @@ class MgmtMonitor(Plugin):
         ).format(self.subscription_id, self.resource_group, self.provider)
 
         client = MonitorManagementClient(
-            credentials,
+            self.get_credentials(),
             self.subscription_id
         )
 
@@ -1473,18 +1482,8 @@ class MgmtNetwork(Plugin):
         return poller.result()
 
     def get_metrics(self):
-
-        try:
-            credentials = ServicePrincipalCredentials(
-                client_id=self.client_id,
-                secret=self.secret_key,
-                tenant=self.tenant_id
-            )
-        except AuthenticationError as e:
-            raise ResultError(e.inner_exception.error_response['error_description'])
-
         client = NetworkManagementClient(
-            credentials,
+            self.get_credentials(),
             self.subscription_id
         )
 
