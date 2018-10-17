@@ -1,6 +1,6 @@
 # Cloud - Azure - Windows VMs Opspack
 
-Azure Windows VMs allow you to monitor various performance metrics for Windows virtual machines, these include metrics for Logical Disk, Memory, Processor, System and Heartbeat. The service checks in this Opspack are designed to complement the service checks in [Azure - Virtual Machines Opspacks](https://github.com/opsview/cloud-azure-virtual-machines).
+Azure Windows VMs allow you to monitor various performance metrics for Windows virtual machines, these include metrics for Logical Disk, Memory, Processor, System and Heartbeat. The service checks in this Opspack are designed to complement the service checks in [Azure - Virtual Machines Opspack](https://github.com/opsview/cloud-azure-virtual-machines).
 
 ## What You Can Monitor
 
