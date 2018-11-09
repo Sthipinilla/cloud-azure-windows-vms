@@ -1,10 +1,24 @@
 # Cloud - Azure - Windows VMs Opspack
 
-Azure Windows VMs allow you to monitor various performance metrics for Windows virtual machines, these include metrics for Logical Disk, Memory, Processor, System and Heartbeat. The service checks in this Opspack are designed to complement the service checks in [Azure - Virtual Machines Opspack](https://github.com/opsview/cloud-azure-virtual-machines).
+Azure Windows VMs allow you to monitor various performance metrics for Windows virtual machines, these include metrics for Logical Disk, Memory, Processor, System and Heartbeat. 
+
+The service checks in this Opspack are designed to complement the service checks in the [Azure - Virtual Machines Opspack](https://github.com/opsview/cloud-azure-virtual-machines) (which works for both Linux and Windows VMs). If installed, this Opspack will provide a set of metrics for Windows VMs comparable to the [OS - Windows Base Opspack](https://github.com/opsview/os-windows-base). Configuring it requires administrator-level permissions for Azure, or the help of an administrator.
+
+**How does this Opspack differ from OS - Windows Base?**
+
+Using *OS - Windows Base* requires the installation of an Opsview Agent for Windows on the target VM - this may be computationally heavy and intrusive for use with small VMs or highly dynamic environments, or where Microsoft solutions are preferred.
+
+However, *OS - Windows Base* does not require Azure administrator permissions, only the ability to launch and configure a VM with internet connectivity and adjust security groups to let the agent communicate with the Opsview Master.
+
+**What does this Opspack offer above Azure - Virtual Machines?**
+
+The *Azure - Virtual Machines Opspack* offers the ability to track VM read/write operations, network traffic in and out, and CPU load. These metrics are gathered via Azure API calls using an administrator defined "Application" or "Service Principal".
+
+This Opspack complements *Azure - Virtual Machines* by offering extended metrics including memory utilization, processor queue length, processor time, logical disk space, heartbeats, and restart/shutdown history. This requires the additional use a Microsoft-approved, open source log analytics agent, called the Log Analytics VM Extension, which Azure can auto-install on your target VM when you enable Azure Log Analytics (see Instructions: [Setup Azure Log Analytics](https://github.com/opsview/cloud-azure-windows-vms#setup-azure-log-analytics)).
 
 ## What You Can Monitor
 
-This Opspack allows you to monitor the performance metrics for Windows virtual machines.
+This Opspack allows you to monitor the performance metrics for Windows virtual machines - in particular memory utilization, processor queue length, processor time, logical disk space, heartbeats, and restart/shutdown history.
 
 ## Service Checks
 
@@ -23,17 +37,18 @@ This Opspack allows you to monitor the performance metrics for Windows virtual m
 
 * Ensure your Opsview Monitor version is newer than 07 September 2018. Check [Opsview Release Notes](https://knowledge.opsview.com/v6.0-EA/docs/whats-new) for the latest version of Opsview Monitor.
 
-## Known Issues
-* **Performance Metrics are not graphed for Azure - Linux VM - Restarts and Azure - Linux VM - Shutdowns.**
-
 ## Setup Azure for Monitoring
 
-To monitor your Azure environment, you need to configure it for monitoring. This requires Administrator access on Azure. You need to retrieve the following credentials:
+To monitor your Azure environment, you need to configure it for monitoring. This requires Administrator access on Azure.
+
+You need to retrieve the following credentials, which will allow Opsview Monitor access to the metrics for your Azure VM:
 
 * Subscription ID
 * Tenant/Directory ID
 * Client/Application ID
 * Secret Key
+
+Follow the below steps to retrieve this information.
 
 #### Step 1: Find Subscription ID
 
@@ -95,7 +110,7 @@ In the Azure portal, click **All Services** and filter for **Log Analytics**. Se
 
 Click **Add**, and then fill in the fields as described:
 
-* Provide a name for your new **OMS Workspace**, such as DefaultWorkspace.
+* Provide a name for your new **OMS Workspace**, such as DefaultWorkspace
 * Select a **Subscription** from the drop-down list.
 * Select an existing **Resource Group** or create a new one.
 * Select the **Location** your VMs are deployed to.
@@ -123,7 +138,7 @@ In the Azure portal, click **All Services** and filter for **Log Analytics**. Se
 
 From the list of Log Analytics workspaces, select the workspace you created earlier.
 
-From the left-hand menu, under **Workspace Data Sources**, select **Virtual Machines**.
+From the left-hand menu, under Workspace Data Sources, select **Virtual Machines**.
 
 ![Find Virtual Machines](/docs/img/azure_log_analytics_virtual_machines.png?raw=true)
 
@@ -180,6 +195,7 @@ Make sure all checkboxes under **ERROR**, **WARNING** and **INFORMATION** are ti
 ![Windows Data Sources](/docs/img/azure_log_analytics_windows_sources.png?raw=true)
 
 Finally, select the **Storage Account Logs** option under your workspace, and add the storage account related to your Virtual Machine.
+
 ![Storage Account Logs](/docs/img/azure_log_analytics_storage_account_logs.png?raw=true)
 
 
