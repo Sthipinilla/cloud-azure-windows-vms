@@ -17,7 +17,16 @@ from msrest.exceptions import AuthenticationError
 from azure.mgmt.monitor.models.error_response import ErrorResponseException
 import json
 import urllib
+import json
+import urllib
 from collections import namedtuple
+import urllib
+from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+from azure.mgmt.recoveryservicesbackup.models import BackupStatusRequest
+from azure.common.credentials import ServicePrincipalCredentials
+from azure.mgmt.recoveryservices import RecoveryServicesClient
+from msrestazure.azure_exceptions import CloudError
+from azure.mgmt.resource import ResourceManagementClient
 import json
 import requests
 import errno
@@ -25,12 +34,42 @@ from collections import namedtuple
 from azure.mgmt.network import NetworkManagementClient
 from azure.mgmt.network.models import TroubleshootingParameters
 from msrestazure.azure_exceptions import CloudError
+from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+from azure.mgmt.recoveryservicesbackup.models import BackupStatusRequest
+from azure.mgmt.resource import ResourceManagementClient
+import datetime
 
 # Stop SNIMissingWarning and InsecurePlatformWarning warnings
 requests.packages.urllib3.disable_warnings(InsecurePlatformWarning)
 requests.packages.urllib3.disable_warnings(SNIMissingWarning)
 
 
+RECOVERY_SERVICES_PARAM_LEN = 2
+RECOVERY_SERVICES_API_VERSION = '2018-01-10'
+RECOVERY_SERVICES_DEFAULT_TIMESPAN_DAYS = 1
+RECOVERY_SERVICES_TIMESPAN_DAY = 1
+RECOVERY_SERVICES_TIMESPAN_WEEK = 7
+
+RECOVERY_SERVICES_UNAUTHORIZED_CLIENT = 'unauthorized_client'
+RECOVERY_SERVICES_INVALID_CLIENT = 'invalid_client'
+RECOVERY_SERVICES_INVALID_REQUEST = 'invalid_request'
+
+RECOVERY_SERVICES_INVALID_TENANT = 'AADSTS90002'
+RECOVERY_SERVICES_INVALID_SUBSCRIPTION = 'SubscriptionNotFound'
+RECOVERY_SERVICES_INVALID_CLIENT_ID = 'AADSTS700016'
+RECOVERY_SERVICES_INVALID_CLIENT_SECRET = 'AADSTS70002'
+
+VAULT_HEALTH_SEVERITY_ERROR = 'Error'
+SEVERITY_LEVELS = {'ok': 'OK', 'information': 'Information', 'warning': 'Warning', 'critical': 'Critical'}
+JOB_STATES = {'notstarted': 'NotStarted',
+              'inprogress': 'InProgress',
+              'succeeded': 'Succeeded',
+              'failed': 'Failed',
+              'cancelled': 'Cancelled',
+              'suspended': 'Suspended',
+              'other': 'Other'}
+
+VAULT_TIMESPAN_DEFAULT = 1  # in days
 LOG_ANALYTICS_PARAM_LEN = 2
 LOG_ANALYTICS_TIMED_PARAM_LEN = 3
 DEFAULT_LOG_QUERY_TIME_MIN = 1440
@@ -91,6 +130,20 @@ SHUTDOWN_REGEX_MATCHES = ['.*Shutdown request received.*',
 
 PERFORMANCE_DATA_TO_IGNORE = ['Available_Memory', 'Free', 'Available',
                               'Time_Since_Last_Update', 'Time_Since_Last_Report']
+HEALTH_STATUS_API_VERSION = '2017-07-01'
+HEALTH_STATUS_PARAM_LEN = 2
+
+HEALTH_STATUS_STATES = ['Unavailable', 'Unknown', 'Degraded', 'Available']
+
+HEALTH_STATUS_UNAUTHORIZED_CLIENT = 'unauthorized_client'
+HEALTH_STATUS_INVALID_CLIENT = 'invalid_client'
+HEALTH_STATUS_INVALID_REQUEST = 'invalid_request'
+
+HEALTH_STATUS_INVALID_TENANT = 'AADSTS90002'
+HEALTH_STATUS_INVALID_SUBSCRIPTION = 'SubscriptionNotFound'
+HEALTH_STATUS_INVALID_CLIENT_ID = 'AADSTS700016'
+HEALTH_STATUS_INVALID_CLIENT_SECRET = 'AADSTS70002'
+
 CONNECTIVITY_API_VERSION = '2018-04-01'
 
 DEFAULT_MAX_DISP = 5
@@ -109,6 +162,11 @@ MGMT_NETWORK_PROVIDER_LEN_SECURITY_RULES = 4
 CONNECTIVITY_STATES = {'reachable': 'Reachable', 'unreachable': 'Unreachable'}
 TROUBLESHOOTING_STATES = {'healthy': 'Healthy', 'unhealthy': 'UnHealthy'}
 WARNING_MONITOR_STATES = {'stopped': 'Stopped', 'notstarted': 'NotStarted'}
+STATUS_STATES = {'Protected': nagiosplugin.Ok, 'Protecting': nagiosplugin.Ok,
+                 'NotProtected': nagiosplugin.Warn,
+                 'ProtectionFailed': nagiosplugin.Critical, 'Invalid': nagiosplugin.Critical}
+
+VAULT_TIMESPAN_DEFAULT = 1  # in days
 
 KILOBYTE = 1024
 MEGABYTE = 1048576
@@ -145,7 +203,6 @@ def convert_seconds(count_seconds):
     mins = (count_seconds - (days * DAY) - (hours * HOUR)) // MINUTE
     seconds = (count_seconds - (days * DAY) - (hours * HOUR) - (mins * MINUTE))
 
-    unit = ''
     if days:
         value = "{0:.0f}d {1:.0f}h {2:.0f}m {3:.0f}s".format(days, hours, mins, seconds)
     elif hours:
@@ -155,7 +212,7 @@ def convert_seconds(count_seconds):
     else:
         value = "{0:.0f}s".format(seconds)
 
-    return value, unit
+    return value
 
 
 def convert_bytes(bytes_count, persecond):
@@ -189,21 +246,21 @@ class Plugin(object):
 
     def __init__(self, client_id, secret_key, tenant_id, subscription_id, resource_group, provider, metrics,
                  aggregation, unit, timespan, interval, thresholds_warning, thresholds_critical, mode, check_interval):
-            self.client_id = client_id.strip()
-            self.secret_key = secret_key.strip()
-            self.tenant_id = tenant_id.strip()
-            self.subscription_id = subscription_id.strip()
-            self.resource_group = resource_group
-            self.provider = provider
-            self.aggregation = aggregation
-            self.unit = unit
-            self.timespan = timespan
-            self.interval = interval
-            self.metrics = metrics
-            self.thresholds_warning = thresholds_warning
-            self.thresholds_critical = thresholds_critical
-            self.mode = mode
-            self.check_interval = check_interval
+        self.client_id = client_id.strip()
+        self.secret_key = secret_key.strip()
+        self.tenant_id = tenant_id.strip()
+        self.subscription_id = subscription_id.strip()
+        self.resource_group = resource_group
+        self.provider = provider
+        self.aggregation = aggregation
+        self.unit = unit
+        self.timespan = timespan
+        self.interval = interval
+        self.metrics = metrics
+        self.thresholds_warning = thresholds_warning
+        self.thresholds_critical = thresholds_critical
+        self.mode = mode
+        self.check_interval = check_interval
 
     def get_credentials(self):
         try:
@@ -260,6 +317,8 @@ class MgmtMonitor(Plugin):
 
     def __init__(self, *args):
         super(MgmtMonitor, self).__init__(*args)
+        if not self.resource_group:
+            raise ParamError("Missing parameter: '-r' or '--resource-group'")
 
     def _get_timespan(self, timespan, interval):
         time_now = datetime.datetime.utcnow()
@@ -385,6 +444,423 @@ class MgmtMonitor(Plugin):
         return check
 
 
+class RestRecoveryServicesReplicationEventsSummary(nagiosplugin.Summary):
+
+    def _get_summary(self, results):
+        value = results[0].metric.value
+        query_timespan = results[0].resource.plugin.query_timespan
+        if not value:
+            summary = "No Recovery Events in the last {0} days".format(query_timespan)
+        else:
+            events_dict = {SEVERITY_LEVELS['ok']: 0,
+                           SEVERITY_LEVELS['warning']: 0,
+                           SEVERITY_LEVELS['information']: 0,
+                           SEVERITY_LEVELS['critical']: 0}
+
+            event_summaries = []
+            for item in value:
+                properties = item.get('properties')
+                if not properties:
+                    continue
+                # get information about the event
+                severity = properties.get('severity')
+                event_description = properties.get('description')
+                event_type = properties.get('eventType')
+                source = properties.get('affectedObjectFriendlyName')
+
+                # increment the count for the event severity
+                events_dict[SEVERITY_LEVELS[severity.lower()]] += 1
+
+                # we only care about warnings and criticals
+                if severity != SEVERITY_LEVELS['ok'] and severity != SEVERITY_LEVELS['information']:
+                    event_summaries.append(("\nSeverity: {0}"
+                                            "\nEvent Description: {1}"
+                                            "\nEvent Type: {2}"
+                                            "\nSource: {3}").format(severity, event_description, event_type, source))
+
+            total_event_count = sum(events_dict.itervalues())
+            if not total_event_count:
+                summary = "No Recovery Events in the last {0} days".format(query_timespan)
+            else:
+                sub_event_counts = ["{0} {1}".format(val, key) for key, val in events_dict.iteritems() if val]
+                summary = "{0} Recovery Events ({1}) in the last {2} days\n".format(
+                    total_event_count, ', '.join(sub_event_counts), query_timespan)
+                if event_summaries:
+                    summary += '\n'.join(event_summaries)
+
+        return summary
+
+    def ok(self, results):
+        return self._get_summary(results)
+
+    def problem(self, results):
+        return self._get_summary(results)
+
+
+class RestRecoveryServicesReplicationEventsContext(nagiosplugin.Context):
+
+    def evaluate(self, metric, resource):
+        hint = None
+        state = nagiosplugin.Ok
+        if metric.value:
+            for item in metric.value:
+                properties = item.get('properties')
+                if not properties:
+                    continue
+
+                severity = properties.get('severity')
+                if severity == SEVERITY_LEVELS['critical']:
+                    state = nagiosplugin.Critical
+                    break
+
+                if severity == SEVERITY_LEVELS['warning']:
+                    state = nagiosplugin.Warn
+
+        return nagiosplugin.Result(state, hint, metric)
+
+
+class RestRecoveryServicesReplicationJobsSummary(nagiosplugin.Summary):
+
+    def _get_summary(self, results):
+        value = results[0].metric.value
+        query_timespan = results[0].resource.plugin.query_timespan
+        if not value:
+            summary = "No Recovery Jobs in the last {0} days".format(query_timespan)
+        else:
+            jobs_dict = {JOB_STATES['succeeded']: 0,
+                         JOB_STATES['inprogress']: 0,
+                         JOB_STATES['notstarted']: 0,
+                         JOB_STATES['cancelled']: 0,
+                         JOB_STATES['suspended']: 0,
+                         JOB_STATES['failed']: 0}
+
+            job_summaries = []
+            for item in value:
+                properties = item.get('properties')
+                if not properties:
+                    continue
+
+                # get information about the job
+                name = properties.get('friendlyName')
+                status = properties.get('state')
+                job_type = properties.get('targetInstanceType')
+                resource_name = properties.get('targetObjectName')
+
+                # increment the count for the job type
+                jobs_dict[JOB_STATES[status.lower()]] += 1
+
+                # we only care about notstarted, cancelled, suspended and failed
+                if status != JOB_STATES['succeeded'] and status != JOB_STATES['inprogress']:
+                    job_summaries.append(("\nName: {0}"
+                                          "\nStatus: {1}"
+                                          "\nJob Type: {2}"
+                                          "\nResource Name: {3}").format(name, status, job_type, resource_name))
+
+            total_job_count = sum(jobs_dict.itervalues())
+            if not total_job_count:
+                summary = "No Recovery Jobs in the last {0} days".format(query_timespan)
+            else:
+                sub_job_counts = ["{0} {1}".format(val, key) for key, val in jobs_dict.iteritems() if val]
+                summary = "{0} Recovery Jobs ({1}) in the last {2} days\n".format(
+                    total_job_count, ', '.join(sub_job_counts), query_timespan)
+                if job_summaries:
+                    summary += '\n'.join(job_summaries)
+
+        return summary
+
+    def ok(self, results):
+        return self._get_summary(results)
+
+    def problem(self, results):
+        return self._get_summary(results)
+
+
+class RestRecoveryServicesReplicationJobsContext(nagiosplugin.Context):
+
+    def evaluate(self, metric, resource):
+        hint = None
+        state = nagiosplugin.Ok
+        if not metric.value:
+            state = nagiosplugin.Warn
+        else:
+            for item in metric.value:
+                properties = item.get('properties')
+                if not properties:
+                    continue
+
+                status = properties.get('state')
+                if status == JOB_STATES['failed']:
+                    state = nagiosplugin.Critical
+                    break
+
+                warning_states = ['notstarted', 'cancelled', 'suspended']
+                if status in [JOB_STATES[x] for x in warning_states]:
+                    state = nagiosplugin.Warn
+
+        return nagiosplugin.Result(state, hint, metric)
+
+
+class RestRecoveryServicesVaultHealthSummary(nagiosplugin.Summary):
+
+    def _get_summary(self, results):
+        properties = results[0].metric.value.get('properties')
+        if not properties:
+            summary = "Vault Healthy"
+        else:
+            items_dict = {'containersHealth': 0,
+                          'fabricsHealth': 0,
+                          'protectedItemsHealth': 0}
+
+            issue_summaries = []
+            for key in items_dict:
+                item = properties.get(key)
+                if not item:
+                    continue
+
+                issues = item.get('issues')
+                if not issues:
+                    continue
+
+                items_dict[key] += len(issues)
+                issue_summaries.append(("\n Issues of type '{0}':").format(key))
+
+                for issue in issues:
+                    severity = issue.get('severity')
+                    summaryCode = issue.get('summaryCode')
+                    summaryMessage = issue.get('summaryMessage')
+                    affectedResource = issue.get('affectedResourceType')
+
+                    issue_summaries.append(("\nSeverity: {0}"
+                                            "\nSummary Code: {1}"
+                                            "\nSummary Message: {2}"
+                                            "\nAffected Resource: {3}").format(
+                                                severity, summaryCode, summaryMessage or "No message returned",
+                                                affectedResource))
+
+            total_issue_count = sum(items_dict.itervalues())
+            if not total_issue_count:
+                summary = "Vault Healthy"
+            else:
+                sub_issue_counts = ["{0} {1}".format(val, key) for key, val in items_dict.iteritems() if val]
+                summary = "{0} Issues ({1})\n".format(total_issue_count, ', '.join(sub_issue_counts))
+                if issue_summaries:
+                    summary += '\n'.join(issue_summaries)
+
+        return summary
+
+    def ok(self, results):
+        return self._get_summary(results)
+
+    def problem(self, results):
+        return self._get_summary(results)
+
+
+class RestRecoveryServicesVaultHealthContext(nagiosplugin.Context):
+
+    def evaluate(self, metric, resource):
+        hint = None
+        state = nagiosplugin.Ok
+        properties = metric.value.get('properties')
+        if not properties:
+            state = nagiosplugin.Unknown
+        else:
+            items_array = ['containersHealth', 'fabricsHealth', 'protectedItemsHealth']
+            for element in items_array:
+                item = properties.get(element)
+                if not item:
+                    state = nagiosplugin.Unknown
+                else:
+                    issues = item.get('issues')
+                    if issues:
+                        state = nagiosplugin.Warn
+                        for issue in issues:
+                            severity = issue.get('severity')
+                            if severity == VAULT_HEALTH_SEVERITY_ERROR:
+                                state = nagiosplugin.Critical
+                                break
+                        break
+
+        return nagiosplugin.Result(state, hint, metric)
+
+
+class RestRecoveryServices(Plugin):
+    def __init__(self, *args):
+        super(RestRecoveryServices, self).__init__(*args)
+        self.auth_url = '{0}{1}/oauth2/token'.format(MICROSOFT_API_URL, self.tenant_id)
+
+        params = namedtuple('RecoveryServicesParams', ('provider', 'query_timespan'))
+        paramslist = self.provider.split(',')
+        if len(paramslist) != RECOVERY_SERVICES_PARAM_LEN:
+            raise ParamError("Provider string should contain exactly {0} variables, not {1}"
+                             .format(RECOVERY_SERVICES_PARAM_LEN, len(paramslist)))
+        self.params = params._make(paramslist)
+
+        mapping = {
+            'Az.Recovery.Replication.Events': {
+                'context': RestRecoveryServicesReplicationEventsContext,
+                'summary': RestRecoveryServicesReplicationEventsSummary
+            },
+            'Az.Recovery.Replication.Jobs': {
+                'context': RestRecoveryServicesReplicationJobsContext,
+                'summary': RestRecoveryServicesReplicationJobsSummary
+            },
+            'Az.Recovery.Replication.Vault.Health': {
+                'context': RestRecoveryServicesVaultHealthContext,
+                'summary': RestRecoveryServicesVaultHealthSummary
+            },
+        }
+
+        self.context = mapping[self.mode]["context"]
+        self.summary = mapping[self.mode]["summary"]
+
+        if not self.resource_group:
+            raise ParamError("Missing parameter: '-r' or '--resource-group'")
+
+        if not self.params.query_timespan:
+            self.query_timespan = VAULT_TIMESPAN_DEFAULT
+        else:
+            try:
+                self.query_timespan = float(self.params.query_timespan)
+                if self.query_timespan.is_integer():
+                    self.query_timespan = int(self.query_timespan)
+            except Exception:
+                raise ParamError("{0} is an invalid Vault Timespan."
+                                 .format(self.params.query_timespan))
+
+        if not (1 <= self.query_timespan <= 7):
+            raise ParamError("{0} is an invalid Vault Timespan. Vault Timespan must be between 1 and 7 days."
+                             .format(self.query_timespan))
+
+    def process_response(self, response):
+        results = []
+        utc_now = datetime.datetime.utcnow()
+
+        value = response.get('value')
+        if value is None:
+            results = response
+        else:
+            for item in value:
+                properties = item.get('properties')
+                if not properties:
+                    results.append(item)
+                    continue
+
+                # filter by time
+                raw_time = properties.get('startTime') or properties.get('timeOfOccurrence')
+                if not raw_time:
+                    results.append(item)
+                    continue
+
+                # timeOfOccurrence returns date in format: 2018-10-05T12:00:00Z
+                # startTime returns date in format:        2018-10-05T12:00:00.1234567Z
+                try:
+                    idx = raw_time.index('.')
+                    raw_time = raw_time[:idx] + raw_time[-1]
+                except ValueError:
+                    pass
+
+                time_of_job = datetime.datetime.strptime(raw_time, '%Y-%m-%dT%H:%M:%SZ')
+                filter_time = utc_now - datetime.timedelta(days=self.query_timespan)
+
+                if time_of_job > filter_time:
+                    results.append(item)
+                    continue
+
+        return results
+
+    def get_token(self, auth_url, client_id, secret_key, resource):
+        client_key_encoded = urllib.quote_plus(secret_key)
+        post_body = (
+            'grant_type=client_credentials&'
+            'client_id={0}&'
+            'client_secret={1}&'
+            'resource={2}'
+        ).format(client_id, client_key_encoded, resource)
+
+        auth_result = requests.post(auth_url, data=post_body)
+        if auth_result.status_code != 200:
+            try:
+                json_response = json.loads(auth_result.text)
+            except ValueError:
+                raise ResultError("Could not parse results from Azure: {0}".format(e))
+
+            code = json_response.get('error')
+            if code == RECOVERY_SERVICES_UNAUTHORIZED_CLIENT or code == RECOVERY_SERVICES_INVALID_CLIENT:
+                error_message = "Error validating Client Credentials. Invalid Client ID or Client Secret Key."
+            elif code == RECOVERY_SERVICES_INVALID_REQUEST:
+                error_message = "The tenant '{0} could not be found".format(self.tenant_id)
+            else:
+                error_message = json_response.get('error_description')
+            raise ResultError(error_message)
+
+        json_response = json.loads(auth_result.text)
+        auth_token = json_response['access_token']
+        return auth_token
+
+    def query_recovery_services(self):
+        mgmt_token = self.get_token(self.auth_url, self.client_id, self.secret_key, AZURE_MGMT_URL)
+        token_encoded = urllib.quote_plus(mgmt_token)
+        headers = {'Authorization': 'Bearer ' + token_encoded, 'Content-Type': 'application/json'}
+
+        url = ('{0}Subscriptions/{1}/resourceGroups/{2}/providers/{3}/{4}?api-version={5}').format(
+            AZURE_MGMT_URL, self.subscription_id, self.resource_group, self.params.provider, self.metrics,
+            RECOVERY_SERVICES_API_VERSION)
+        response = requests.get(url, headers=headers)
+
+        try:
+            json_response = json.loads(response.text)
+        except ValueError:
+            raise ResultError("Could not parse results from Azure: {0}".format(e))
+
+        if response.status_code != 200:
+            self.check_vault_exists(headers)
+
+            error = json_response.get('error')
+            if not error:
+                error_message = "An unknown error occured."
+            else:
+                code = error.get('code')
+                if code == RECOVERY_SERVICES_INVALID_TENANT:
+                    error_message = "The tenant '{0}' could not be found".format(self.tenant_id)
+                elif code == RECOVERY_SERVICES_INVALID_SUBSCRIPTION:
+                    error_message = "The subscription '{0}' could not be found".format(self.subscription_id)
+                elif code == RECOVERY_SERVICES_INVALID_CLIENT_ID or code == RECOVERY_SERVICES_INVALID_CLIENT_SECRET:
+                    error_message = "Error validating Client Credentials. Invalid Client ID or Client Secret Key."
+                else:
+                    error_message = error.get('message')
+            raise ResultError(error_message)
+
+        return json_response
+
+    def check_vault_exists(self, headers):
+        url = ('{0}subscriptions/{1}/resourceGroups/{2}/providers/{3}?api-version={4}').format(
+            AZURE_MGMT_URL, self.subscription_id, self.resource_group, self.params.provider,
+            RECOVERY_SERVICES_API_VERSION)
+        response = requests.get(url, headers=headers)
+        try:
+            json_response = json.loads(response.text)
+        except ValueError:
+            pass
+
+        error = json_response.get('error')
+        if error:
+            code = error.get('code')
+            if code == 'ResourceNotFound':
+                vaultName = self.params.provider.split('/')[2]
+                raise ParamError("The vault '{0}' could not be found under resource group '{1}'."
+                                 .format(vaultName, self.resource_group))
+
+    def get_metrics(self):
+        response = self.query_recovery_services()
+        results = self.process_response(response)
+        return nagiosplugin.Metric(self.metrics, results)
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource, self.summary())
+        check.add(self.context(self.metrics))
+        return check
+
+
 class LogAnalyticsSummary(nagiosplugin.Summary):
 
     # results are either a single value e.g. memory swap space is 0%
@@ -398,7 +874,8 @@ class LogAnalyticsSummary(nagiosplugin.Summary):
             uom = result.metric.uom
 
             if uom == SECONDS_UNIT:
-                value, uom = convert_seconds(value)
+                value = convert_seconds(value)
+                uom = ""
             elif uom == BYTES_UNIT:
                 value, uom = convert_bytes(value, False)
 
@@ -641,6 +1118,9 @@ class LogAnalytics(Plugin):
         self.check_resource_group(headers)
         self.check_resource(headers)
 
+        if not self.resource_group:
+            raise ParamError("Missing parameter: '-r' or '--resource-group'")
+
     def check_resource_group(self, headers):
         req_url = '{0}subscriptions/{1}/resourcegroups/{2}?api-version={3}'.format(AZURE_MGMT_URL,
                                                                                    self.subscription_id,
@@ -875,6 +1355,253 @@ class LogAnalytics(Plugin):
         check.add(LogAnalyticsWindowsMachineEventsContext(WINDOWS_MACHINE_EVENTS_CONTEXT_NAME,
                                                           self.thresholds_warning[0], self.thresholds_critical[0]))
         return check
+
+
+class RestHealthAvailabilityStatusSummary(nagiosplugin.Summary):
+
+    def _get_summary(self, results):
+        result = results.results[0]
+        return "{0} {1}".format(result.metric, result.hint)
+
+    def ok(self, results):
+        return self._get_summary(results)
+
+    def problem(self, results):
+        return self._get_summary(results)
+
+
+class RestHealthAvailabilityStatusContext(nagiosplugin.Context):
+
+    def evaluate(self, metric, resource):
+        state = nagiosplugin.Ok
+        hint = ""
+        value = metric.value.get('value')
+        if not value:
+            state = nagiosplugin.Unknown
+        else:
+            resources = {}
+            for item in value:
+                resource_id = item.get('id').split('/')
+                resource_name = resource_id[8]
+                resource_type = resource_id[7]
+                properties = item.get('properties')
+                summary = properties.get('summary')
+                availability_state = properties.get('availabilityState')
+                recommended_actions_list = [action.get('action') for action in properties.get('recommendedActions', [])]
+                recommended_actions = '\n'.join(recommended_actions_list) or 'NA'
+
+                # in case we have a state that's not in the dictionary
+                resources_in_state = resources.get(availability_state)
+                if resources_in_state is None:
+                    resources[availability_state] = []
+
+                resources[availability_state].append("\nResource Type: {0}"
+                                                     "\nResource Name: {1}"
+                                                     "\nSummary:\n{2}"
+                                                     "\nRecommended Actions:\n{3}".format(
+                                                         resource_type, resource_name, summary,
+                                                         recommended_actions))
+
+            metrics = ['{0} resource{1} {2}'.format(len(resources[resource_state]),
+                                                    ' is' if len(resources[resource_state]) == 1 else 's are',
+                                                    resource_state)
+                       for resource_state in HEALTH_STATUS_STATES if resource_state in resources]
+            metric = '{0} in {1}'.format(', '.join(metrics), resource.plugin.resource_group)
+
+            if 'Unavailable' in resources:
+                state = nagiosplugin.Critical
+            elif 'Unknown' in resources or 'Degraded' in resources:
+                state = nagiosplugin.Warn
+
+            items_count = 0
+            for resource_state, resource_descriptions in resources.iteritems():
+                if resource_state != 'Available' and resource_descriptions:
+                    items_count += 1
+                    if not resource.plugin.show_all and items_count > resource.plugin.resource_limit:
+                        break
+                    hint += "\n\nAvailability State '{0}':\n{1}".format(resource_state,
+                                                                        '\n'.join(resources[resource_state]))
+
+        return nagiosplugin.Result(state, hint, metric)
+
+
+class RestHealthAvailabilityStatus(Plugin):
+
+    def __init__(self, *args):
+        super(RestHealthAvailabilityStatus, self).__init__(*args)
+        self.auth_url = '{0}{1}/oauth2/token'.format(MICROSOFT_API_URL, self.tenant_id)
+        self.summary = RestHealthAvailabilityStatusSummary
+        self.context = RestHealthAvailabilityStatusContext
+
+        params = self.provider.split(',')
+        if len(params) != HEALTH_STATUS_PARAM_LEN:
+            raise ParamError("Provider string should contain exactly {0} variables, not {1}"
+                             .format(HEALTH_STATUS_PARAM_LEN, len(params)))
+
+        if not self.resource_group:
+            raise ParamError("Missing parameter: '-r' or '--resource-group'")
+
+        self.provider = params[0]
+        self.resource_limit = params[1]
+        self.show_all = False
+        try:
+            if self.resource_limit.strip():
+                self.resource_limit = int(self.resource_limit.strip())
+            else:
+                self.show_all = True
+
+        except ValueError:
+            raise ParamError("Invalid resource limit: '{0}'".format(self.resource_limit))
+
+    def get_token(self, auth_url, client_id, secret_key):
+        client_key_encoded = urllib.quote_plus(secret_key)
+        post_body = (
+            'grant_type=client_credentials&'
+            'client_id={0}&'
+            'client_secret={1}&'
+            'resource={2}'
+        ).format(client_id, client_key_encoded, AZURE_MGMT_URL)
+
+        auth_result = requests.post(auth_url, data=post_body)
+        if auth_result.status_code != 200:
+            try:
+                json_response = auth_result.json()
+            except ValueError:
+                raise ResultError("Could not parse results from Azure: {0}".format(e))
+
+            code = json_response.get('error')
+            if code == HEALTH_STATUS_UNAUTHORIZED_CLIENT or code == HEALTH_STATUS_INVALID_CLIENT:
+                error_message = "Error validating Client Credentials. Invalid Client ID or Client Secret Key."
+            elif code == HEALTH_STATUS_INVALID_REQUEST:
+                error_message = "The tenant '{0} could not be found".format(self.tenant_id)
+            else:
+                error_message = json_response.get('error_description')
+            raise ResultError(error_message)
+
+        json_response = auth_result.json()
+        auth_token = json_response['access_token']
+        return auth_token
+
+    def query(self):
+        token = self.get_token(self.auth_url, self.client_id, self.secret_key)
+        token_encoded = urllib.quote_plus(token)
+        headers = {'Authorization': 'Bearer ' + token_encoded, 'Content-Type': 'application/json'}
+
+        url = ('{0}Subscriptions/{1}/resourceGroups/{2}/providers/{3}/{4}?api-version={5}&$expand=recommendedactions') \
+            .format(AZURE_MGMT_URL, self.subscription_id, self.resource_group, self.provider, self.metrics,
+                    HEALTH_STATUS_API_VERSION)
+        response = requests.get(url, headers=headers)
+
+        try:
+            json_response = response.json()
+        except ValueError as e:
+            raise ResultError("Could not parse results from Azure: {0}".format(e))
+
+        if response.status_code != 200:
+            error = json_response.get('error')
+            if not error:
+                message = json_response.get('message')
+                if not message:
+                    error_message = "An unknown error occured."
+                else:
+                    error_message = message
+            else:
+                code = error.get('code')
+                if code == HEALTH_STATUS_INVALID_TENANT:
+                    error_message = "The tenant '{0}' could not be found".format(self.tenant_id)
+                elif code == HEALTH_STATUS_INVALID_SUBSCRIPTION:
+                    error_message = "The subscription '{0}' could not be found".format(self.subscription_id)
+                elif code == HEALTH_STATUS_INVALID_CLIENT_ID or code == HEALTH_STATUS_INVALID_CLIENT_SECRET:
+                    error_message = "Error validating Client Credentials. Invalid Client ID or Client Secret Key."
+                else:
+                    error_message = error.get('message')
+            raise ResultError(error_message)
+
+        return json_response
+
+    def get_metrics(self):
+        response = self.query()
+        return nagiosplugin.Metric(self.metrics, response)
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource, self.summary())
+        check.add(self.context(self.metrics))
+        return check
+
+
+class MgmtRecoveryServices(Plugin):
+
+    def __init__(self, *args):
+        super(MgmtRecoveryServices, self).__init__(*args)
+        mapping = {
+            'Az.Recovery.Replicated.Items':
+            {
+                "check": self.replicated_items,
+                "context": nagiosplugin.ScalarContext,
+                "summary": nagiosplugin.Summary
+            },
+        }
+        self.check_method = mapping[self.mode]['check']
+        self.context = mapping[self.mode]['context']
+        self.summary = mapping[self.mode]['summary']
+        self.resource_name = self.provider.split('/')[2]
+        if not self.resource_group:
+            raise ParamError("Missing parameter: '-r' or '--resource-group'")
+        self.resource = None
+        self.resource_type = self.get_resource_type()
+
+    def _convert_name(self, name):
+        name = re.sub(r'(\w)([A-Z])', r'\1_\2', name).title()
+        return name
+
+    def get_resource(self):
+        if not self.resource:
+            resource_client = ResourceManagementClient(self.get_credentials(), self.subscription_id)
+            resources = resource_client.resources.list_by_resource_group(self.resource_group)
+
+            resource_filter = filter(lambda x: x.name == self.resource_name, resources)
+            if len(resource_filter):
+                self.resource = resource_filter[0]
+            else:
+                raise ParamError("Resource {0} does not exist in Resource Group {1}".format(self.resource_name,
+                                                                                            self.resource_group))
+        return self.resource
+
+    def replicated_items(self, client):
+        if self.resource_type != 'Microsoft.RecoveryServices/vaults':
+            raise ParamError("{0} is not a Vault".format(self.resource_name))
+        usages = [usage for usage in client.usages.list_by_vaults(self.resource_group, self.resource_name)]
+        replicated_items_usage_filter = filter(lambda x: x.name.value == 'ProtectedItem', usages)
+        if replicated_items_usage_filter:  # if the filter got back a result
+            return replicated_items_usage_filter[0].current_value
+        else:
+            raise ResultError("ReplicatedItems not reported by Azure")
+
+    def get_metrics(self):
+        client = RecoveryServicesClient(
+            self.get_credentials(),
+            self.subscription_id)
+        result = self.check_method(client)
+        return nagiosplugin.Metric(self._convert_name(self.metrics), result)
+
+    def get_resource_type(self):
+        return self.get_resource().type
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource, ReplicatedItemsContext(self._convert_name(self.metrics),
+                                                                    self.thresholds_warning[0],
+                                                                    self.thresholds_critical[0]), self.summary())
+        return check
+
+
+class ReplicatedItemsContext(nagiosplugin.ScalarContext):
+    def describe(self, metric):
+        if metric.value != 1:
+            self.fmt_metric = "{value} Replicated Items"
+        else:
+            self.fmt_metric = "{value} Replicated Item"
+
+        return super(ReplicatedItemsContext, self).describe(metric)
 
 
 class MgmtNetworkConnectivitySummary(nagiosplugin.Summary):
@@ -1207,6 +1934,10 @@ class MgmtNetwork(Plugin):
             }
         }
 
+        if self.mode in ['Az.Network.Watcher.VM.Security.Rules',
+                         'Az.Network.Watcher.VNG.Troubleshooting'] and not self.resource_group:
+                raise ParamError("Missing parameter: '-r' or '--resource-group'")
+
         paramslist = self.provider.split(',')
         try:
             if len(paramslist) != mapping[self.mode]['provider_length']:
@@ -1497,6 +2228,228 @@ class MgmtNetwork(Plugin):
         return check
 
 
+class MgmtRecoveryServicesBackup(Plugin):
+
+    def __init__(self, *args):
+        super(MgmtRecoveryServicesBackup, self).__init__(*args)
+        mapping = {
+            "Az.Backup.Jobs":
+            {
+                "check": self.backup_jobs_list,
+                "context": BackupJobsContext,
+                "summary": BackupJobsSummary
+            },
+            "Az.Windows.VM.Backup.Status":
+            {
+                "check": self.backup_vm_get,
+                "context": BackupStatusContext,
+                "summary": BackupStatusSummary
+            },
+            "Az.Linux.VM.Backup.Status":
+            {
+                "check": self.backup_vm_get,
+                "context": BackupStatusContext,
+                "summary": BackupStatusSummary
+            }
+        }
+
+        if not self.resource_group:
+            raise ParamError("Missing parameter: '-r' or '--resource-group'")
+
+        self.check_method = mapping[self.mode]['check']
+        self.context = mapping[self.mode]['context']
+        self.summary = mapping[self.mode]['summary']
+
+        self.provider_list = self.provider.split(',')
+        self.resource_name = self.provider_list[0].split('/')[2]
+
+        self.resource = None
+
+        if len(self.provider_list) == 2:
+            if not self.provider_list[1]:
+                self.query_timespan = VAULT_TIMESPAN_DEFAULT
+            else:
+                try:
+                    self.query_timespan = float(self.provider_list[1])
+                    if self.query_timespan.is_integer():
+                        self.query_timespan = int(self.query_timespan)
+                except Exception:
+                    raise ParamError("{0} is an invalid Vault Timespan."
+                                     .format(self.provider_list[1]))
+
+            if not (1 <= self.query_timespan <= 7):
+                raise ParamError(("{0} is an invalid Vault Timespan. Vault Timespan"
+                                  " must be between 1 and 7 days.").format(self.query_timespan))
+
+        self.resource_location = self.get_location()
+        self.resource_type = self.get_resource_type()
+
+    def _get_odata_timespan(self):
+        """Generates an Open Data Protocol Time Filter"""
+        time_now = datetime.datetime.utcnow()
+        time_start = time_now - datetime.timedelta(days=self.query_timespan)
+
+        odata_string = "startTime eq '{0}' and endTime eq '{1}'".format(
+            time_start.strftime('%Y-%m-%d %I:%M:%S %p'), time_now.strftime('%Y-%m-%d %I:%M:%S %p')
+        )
+        return odata_string
+
+    def backup_jobs_list(self, client):
+        if self.resource_type != 'Microsoft.RecoveryServices/vaults':
+            raise ParamError("{0} is not a Vault".format(self.resource_name))
+        jobs = client.backup_jobs.list(self.resource_name, self.resource_group,
+                                       raw=True, filter=self._get_odata_timespan())
+
+        return [job for job in jobs]  # get jobs out of iterable in to list
+
+    def backup_vm_get(self, client):
+        if self.resource_type != 'Microsoft.Compute/virtualMachines':
+            raise ParamError("{0} is not a Virtual Machine".format(self.resource_name))
+        resource_id = (
+            '/subscriptions/{0}/'
+            'resourceGroups/{1}/'
+            'providers/{2}'
+        ).format(self.subscription_id, self.resource_group, self.provider_list[0])
+        request = BackupStatusRequest(resource_type='VM',
+                                      resource_id=resource_id)
+
+        return client.backup_status.get(self.resource_location, request)
+
+    def get_resource(self):
+        if not self.resource:
+            resource_client = ResourceManagementClient(self.get_credentials(), self.subscription_id)
+            resources = resource_client.resources.list_by_resource_group(self.resource_group)
+
+            resource_filter = filter(lambda x: x.name == self.resource_name, resources)
+            if len(resource_filter):
+                self.resource = resource_filter[0]
+            else:
+                raise ParamError("Resource {0} does not exist in Resource Group {1}".format(self.resource_name,
+                                                                                            self.resource_group))
+        return self.resource
+
+    def get_location(self):
+        return self.get_resource().location
+
+    def get_resource_type(self):
+        return self.get_resource().type
+
+    def _convert_name(self, name):
+        name = re.sub(r'(\w)([A-Z])', r'\1_\2', name).title()
+        return name
+
+    def get_metrics(self):
+        client = RecoveryServicesBackupClient(
+            self.get_credentials(),
+            self.subscription_id)
+
+        result = self.check_method(client)
+        return nagiosplugin.Metric(self.metrics, result)
+
+    def get_check(self, resource):
+        check = nagiosplugin.Check(resource, self.context(self.metrics), self.summary())
+        return check
+
+
+class BackupJobsContext(nagiosplugin.Context):
+    def describe(self, metric):
+        return "describe"
+
+    def evaluate(self, metric, resource):
+        jobs = metric[1]
+        if len(jobs) > 0:
+            job_dict = {'Cancelled': [], 'Failed': [], 'Completed': [], 'InProgress': [], 'CompletedWithWarnings': []}
+
+            for i, job in enumerate(jobs):
+                job_dict[job.properties.status].append(i)
+
+            if len(job_dict['Failed']) > 0:
+                state = nagiosplugin.Critical
+                metric = [jobs[i] for key in ['Failed', 'CompletedWithWarnings', 'Cancelled']
+                          for i in job_dict[key]]
+
+            elif len(job_dict['Cancelled']) + len(job_dict['CompletedWithWarnings']) > 0:
+                state = nagiosplugin.Warn
+                metric = [jobs[i] for key in ['CompletedWithWarnings', 'Cancelled'] for i in job_dict[key]]
+
+            else:
+                state = nagiosplugin.Ok
+                metric = []
+
+            # build hint
+            hint = []
+            for key in job_dict.keys():
+                if job_dict[key]:  # if there are jobs in this status
+                    hint.append("{0} {1}".format(len(job_dict[key]), key))
+
+            hint = "{0} Backup Jobs in the last {1} days ({2})".format(
+                len(jobs), resource.plugin.query_timespan, ", ".join(hint)
+            )
+
+        else:
+            state = nagiosplugin.Warn
+            hint = "No Backup Jobs in the last {0} days".format(resource.plugin.query_timespan)
+            metric = []
+        return nagiosplugin.Result(state, hint=hint, metric=metric)
+
+
+class BackupStatusContext(nagiosplugin.Context):
+    def __init__(self, name):
+        super(BackupStatusContext, self).__init__(name)
+
+    def evaluate(self, metric, resource):
+        state = STATUS_STATES[metric.value.protection_status]
+        if state.code == 0:  # Ok
+            hint = "{0} is Backed Up".format(resource.plugin.resource_name)
+        elif state.code == 1:  # Warn
+            hint = "{0} isn't Backed Up".format(resource.plugin.resource_name)
+        else:  # Critical
+            hint = "{0} has Backups enabled but returns error:".format(resource.plugin.resource_name)
+
+        return nagiosplugin.Result(state, hint=hint, metric=metric)
+
+
+class BackupJobsSummary(nagiosplugin.Summary):
+    def ok(self, results):
+        string = results[0].hint
+        return string
+
+    def problem(self, results):
+        jobs = results.results[0][2]
+        job_str = []
+        for job in jobs:
+            props = job.properties
+            if not props.error_details:
+                error_details = "None Provided"
+            else:
+                error_details = props.error_details[0].error_string
+            job_str.append("Name: {0}\n"
+                           "Operation: {1}\n"
+                           "Status: {2}\n"
+                           "Start Time: {3}\n"
+                           "Error: {4}\n"
+                           "Duration: {5}".format(props.entity_friendly_name, props.operation,
+                                                  props.status, props.start_time.strftime("%x %X UTC"),
+                                                  error_details, convert_seconds(props.duration.seconds)))
+
+        string = "{0}\n\n{1}".format(results[0].hint, "\n\n".join(job_str))
+        return string
+
+
+class BackupStatusSummary(nagiosplugin.Summary):
+    def problem(self, results):
+        details = ""
+        if results.results[0].state.code in [1, 2]:  # warning or critical
+            response = results.results[0].metric[1]
+            details = "Protection Status: {0}".format(response.protection_status)
+        if results.results[0].state.code == 2:  # critical
+            details += "\nVault ID: {0}" \
+                       "\nError Message: {1}" \
+                       "\nError Code: {2}".format(response.vault_id, response.error_message, response.error_code)
+
+        return "{0}\n{1}".format(results.results[0].hint, details)
+
+
 class ModeUsage(object):
 
     def __init__(self, metrics, provider, unit, aggregation, plugin_type, thresholds_warning, thresholds_critical,
@@ -1539,14 +2492,13 @@ def expand_provider(provider_template):
             key = '{' + argument.resource_key + '}'
             if key in provider_str:
                 if argument.value is None:
-                    raise ParamError("Missing parameter: '{}' or '{}'"
+                    raise ParamError("Missing parameter: '{0}' or '{1}'"
                                      .format(argument.short_param, argument.long_param))
                 provider_str = provider_str.replace(key, argument.value)
     return provider_str
 
 
 def run_check(args, mode_usage):
-
     mode_thresholds_warning = mode_usage.thresholds_warning.split(',')
     if args.warning:
         thresholds_warning = str(args.warning).split(',')
@@ -1577,7 +2529,7 @@ def run_check(args, mode_usage):
                                                              thresholds_warning, thresholds_critical, args.mode,
                                                              args.check_interval)
     except KeyError:
-        raise ParamError("Invalid Plugin: {}".format(mode_usage.plugin_type))
+        raise ParamError("Invalid Plugin: {0}".format(mode_usage.plugin_type))
 
     check = check_class.get_check(Metric(check_class))
 
@@ -1597,7 +2549,18 @@ def get_args():
     for variable in RESOURCE_VARIABLES:
         for arg in variable.arguments:
             parser.add_argument(arg.short_param, arg.long_param, help=arg.help)
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    if not getattr(args, 'subscription_id'):
+        raise ParamError("Missing parameter: '-s' or '--subscription-id'")
+    elif not getattr(args, 'tenant_id'):
+        raise ParamError("Missing parameter: '-t' or '--tenant-id'")
+    elif not getattr(args, 'client_id'):
+        raise ParamError("Missing parameter: '-C' or '--client-id'")
+    elif not getattr(args, 'secret_key'):
+        raise ParamError("Missing parameter: '-S' or '--secret-key'")
+
+    return args
 
 
 def main():
@@ -1605,7 +2568,7 @@ def main():
     try:
         mode_usage = MODE_MAPPING[args.mode]
     except KeyError:
-        raise ParamError("Invalid mode: '{}'".format(args.mode))
+        raise ParamError("Invalid mode: '{0}'".format(args.mode))
 
     # Update resource values from args
     for variable in RESOURCE_VARIABLES:
@@ -1618,8 +2581,12 @@ def main():
 
 PLUGIN_MAPPING = {
     'mgmt_monitor': MgmtMonitor,
+    'rest_recovery_services': RestRecoveryServices,
     'log_analytics': LogAnalytics,
+    'rest_health_availability_status': RestHealthAvailabilityStatus,
+    'mgmt_recovery_services': MgmtRecoveryServices,
     'mgmt_network': MgmtNetwork,
+    'mgmt_recovery_services_backup': MgmtRecoveryServicesBackup,
 }
 
 
@@ -2020,6 +2987,12 @@ MODE_MAPPING = {
                   'NA', 'NA', 'log_analytics',
                   '', '',
                   '86400', '86400'),
+    'Az.Linux.VM.Backup.Status':
+        ModeUsage('VMBackupStatus',
+                  'Microsoft.Compute/virtualMachines/{AZURE_RESOURCE_NAME}',
+                  'NA', 'NA', 'mgmt_recovery_services_backup',
+                  '', '',
+                  '300', '300'),
     'Az.Windows.VM.Memory':
         ModeUsage('% Committed Bytes In Use,Available Mbytes',
                   '{AZURE_RESOURCE_NAME},{AZURE_WORKSPACE_ID}',
@@ -2068,6 +3041,48 @@ MODE_MAPPING = {
                   'NA', 'NA', 'log_analytics',
                   '', '',
                   '86400', '86400'),
+    'Az.Windows.VM.Backup.Status':
+        ModeUsage('VMBackupStatus',
+                  'Microsoft.Compute/virtualMachines/{AZURE_RESOURCE_NAME}',
+                  'NA', 'NA', 'mgmt_recovery_services_backup',
+                  '', '',
+                  '300', '300'),
+    'Az.Backup.Jobs':
+        ModeUsage('BackupJobs',
+                  'Microsoft.RecoveryServices/vaults/{AZURE_RESOURCE_NAME},{AZURE_VAULT_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'mgmt_recovery_services_backup',
+                  '', '',
+                  '300', '300'),
+    'Az.Recovery.Replication.Events':
+        ModeUsage('replicationEvents',
+                  'Microsoft.RecoveryServices/vaults/{AZURE_RESOURCE_NAME},{AZURE_VAULT_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'rest_recovery_services',
+                  '', '',
+                  '300', '300'),
+    'Az.Recovery.Replicated.Items':
+        ModeUsage('ReplicatedItems',
+                  'Microsoft.RecoveryServices/vaults/{AZURE_RESOURCE_NAME}',
+                  'Count', 'Total', 'mgmt_recovery_services',
+                  '', '',
+                  '300', '300'),
+    'Az.Recovery.Replication.Jobs':
+        ModeUsage('replicationJobs',
+                  'Microsoft.RecoveryServices/vaults/{AZURE_RESOURCE_NAME},{AZURE_VAULT_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'rest_recovery_services',
+                  '', '',
+                  '300', '300'),
+    'Az.Recovery.Replication.Vault.Health':
+        ModeUsage('replicationVaultHealth',
+                  'Microsoft.RecoveryServices/vaults/{AZURE_RESOURCE_NAME},{AZURE_VAULT_QUERY_TIMESPAN}',
+                  'NA', 'NA', 'rest_recovery_services',
+                  '', '',
+                  '300', '300'),
+    'Az.Health.Availability.Status':
+        ModeUsage('availabilityStatuses',
+                  'Microsoft.ResourceHealth,{AZURE_RESOURCE_LIMIT}',
+                  'NA', 'NA', 'rest_health_availability_status',
+                  '', '',
+                  '300', '300'),
 }
 
 
@@ -2118,8 +3133,18 @@ RESOURCE_VARIABLES = [
                          'Name of the Azure Network resource to be monitored',
                          'AZURE_NW_RESOURCE_NAME'),
         ResourceArgument('-md', '--max-display-number',
-                         'The maxmimum number of list items to display for Network Watcher Service Checks',
+                         'The maximum number of list items to display for Network Watcher Service Checks',
                          'AZURE_MAX_DISP_NUMBER'),
+    ]),
+    ResourceVariable('AZURE_HEALTH_AVAILABILITY_SETTINGS', 'Azure Health Availability Settings', arguments=[
+        ResourceArgument('-rl', '--resource-limit',
+                         'The number of resources to show. By default shows the status of all resources that are not available.',
+                         'AZURE_RESOURCE_LIMIT'),
+    ]),
+    ResourceVariable('AZURE_VAULT_SETTINGS', 'Azure Vault Settings', arguments=[
+        ResourceArgument('-vt', '--vault-timespan',
+                         'The timespan for querying vault jobs and events in days',
+                         'AZURE_VAULT_QUERY_TIMESPAN'),
     ]),
     ResourceVariable('AZURE_LOG_ANALYTICS_DETAILS', 'Azure Log Analytics Details', arguments=[
         ResourceArgument('-W', '--workspace-id',
@@ -2130,7 +3155,6 @@ RESOURCE_VARIABLES = [
                          'AZURE_LOG_QUERY_TIMESPAN'),
     ]),
 ]
-
 
 if __name__ == '__main__':
     try:

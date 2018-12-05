@@ -1,20 +1,6 @@
 # Cloud - Azure - Windows VMs Opspack
 
-Azure Windows VMs allow you to monitor various performance metrics for Windows virtual machines, these include metrics for Logical Disk, Memory, Processor, System and Heartbeat. 
-
-The service checks in this Opspack are designed to complement the service checks in the [Azure - Virtual Machines Opspack](https://github.com/opsview/cloud-azure-virtual-machines) (which works for both Linux and Windows VMs). If installed, this Opspack will provide a set of metrics for Windows VMs comparable to the [OS - Windows Base Opspack](https://github.com/opsview/os-windows-base). Configuring it requires administrator-level permissions for Azure, or the help of an administrator.
-
-**How does this Opspack differ from OS - Windows Base?**
-
-Using *OS - Windows Base* requires the installation of an Opsview Agent for Windows on the target VM - this may be computationally heavy and intrusive for use with small VMs or highly dynamic environments, or where Microsoft solutions are preferred.
-
-However, *OS - Windows Base* does not require Azure administrator permissions, only the ability to launch and configure a VM with internet connectivity and adjust security groups to let the agent communicate with the Opsview Master.
-
-**What does this Opspack offer above Azure - Virtual Machines?**
-
-The *Azure - Virtual Machines Opspack* offers the ability to track VM read/write operations, network traffic in and out, and CPU load. These metrics are gathered via Azure API calls using an administrator defined "Application" or "Service Principal".
-
-This Opspack complements *Azure - Virtual Machines* by offering extended metrics including memory utilization, processor queue length, processor time, logical disk space, heartbeats, and restart/shutdown history. This requires the additional use a Microsoft-approved, open source log analytics agent, called the Log Analytics VM Extension, which Azure can auto-install on your target VM when you enable Azure Log Analytics (see Instructions: [Setup Azure Log Analytics](https://github.com/opsview/cloud-azure-windows-vms#setup-azure-log-analytics)).
+Azure Windows VMs allow you to monitor various performance metrics for Windows virtual machines, these include metrics for Logical Disk, Memory, Processor, System and Heartbeat.<br/><br/>The service checks in this Opspack are designed to complement the service checks in the [Azure - Virtual Machines Opspack](https://github.com/opsview/cloud-azure-virtual-machines) (which works for both Linux and Windows VMs). If installed, this Opspack will provide a set of metrics for Windows VMs comparable to the [OS - Windows Base Opspack](https://github.com/opsview/os-windows-base). Configuring it requires administrator-level permissions for Azure, or the help of an administrator.<br/><br/>**How does this Opspack differ from OS - Windows Base?**<br/><br/>Using *OS - Windows Base* requires the installation of an Opsview Agent for Windows on the target VM - this may be computationally heavy and intrusive for use with small VMs or highly dynamic environments, or where Microsoft solutions are preferred.<br/><br/>However, *OS - Windows Base* does not require Azure administrator permissions, only the ability to launch and configure a VM with internet connectivity and adjust security groups to let the agent communicate with the Opsview Master.<br/><br/>**What does this Opspack offer above Azure - Virtual Machines?**<br/><br/>The *Azure - Virtual Machines Opspack* offers the ability to track VM read/write operations, network traffic in and out, and CPU load. These metrics are gathered via Azure API calls using an administrator defined "Application" or "Service Principal".<br/><br/>This Opspack complements *Azure - Virtual Machines* by offering extended metrics including memory utilization, processor queue length, processor time, logical disk space, heartbeats, and restart/shutdown history. This requires the additional use a Microsoft-approved, open source log analytics agent, called the Log Analytics VM Extension, which Azure can auto-install on your target VM when you enable Azure Log Analytics (see Instructions: [Setup Azure Log Analytics](https://github.com/opsview/cloud-azure-windows-vms#setup-azure-log-analytics)).
 
 ## What You Can Monitor
 
@@ -32,10 +18,12 @@ This Opspack allows you to monitor the performance metrics for Windows virtual m
 | Cloud - Azure - Windows VMs | Azure - Windows VM - Heartbeat | The time between the last two heartbeats [Default Timespan = 5mins, Granularity = 5mins] |
 | Cloud - Azure - Windows VMs | Azure - Windows VM - Restarts | The number of restarts, and information on the user and comment history [Default Timespan = 1440mins, Granularity = 1440mins] |
 | Cloud - Azure - Windows VMs | Azure - Windows VM - Shutdowns | The number of shutdowns, and information on the user and comment history [Default Timespan = 1440mins, Granularity = 1440mins] |
+| Cloud - Azure - VM Backups | Azure - VM Backup - Backup Status | The backup status of a Virtual Machine in Azure [Default Timespan = 5mins, Granularity = 5mins] |
 
 ## Prerequisites
 
-* Ensure your Opsview Monitor version is newer than 07 September 2018. Check [Opsview Release Notes](https://knowledge.opsview.com/v6.0-EA/docs/whats-new) for the latest version of Opsview Monitor.
+* Ensure your Opsview Monitor version is newer than 07 September 2018. Check [Opsview Release Notes](https://knowledge.opsview.com/docs/whats-new) for the latest version of Opsview Monitor.
+
 
 ## Setup Azure for Monitoring
 
@@ -54,9 +42,9 @@ Follow the below steps to retrieve this information.
 
 The Subscription ID can be found in the **Subscriptions** section under the **All services** section from the Azure dashboard.
 
-![Find Azure Subscription ID](/docs/img/azure_find_subscription_id_1.jpg?raw=true)
+![Find Azure Subscription ID](/docs/img/azure_find_subscription_id_1.png?raw=true)
 
-![Find Azure Subscription ID](/docs/img/azure_find_subscription_id_2.jpg?raw=true)
+![Find Azure Subscription ID](/docs/img/azure_find_subscription_id_2.png?raw=true)
 
 #### Step 2 : Find the Tenant/Directory ID
 
@@ -110,7 +98,7 @@ In the Azure portal, click **All Services** and filter for **Log Analytics**. Se
 
 Click **Add**, and then fill in the fields as described:
 
-* Provide a name for your new **OMS Workspace**, such as DefaultWorkspace
+* Provide a name for your new **OMS Workspace**, such as DefaultWorkspace.
 * Select a **Subscription** from the drop-down list.
 * Select an existing **Resource Group** or create a new one.
 * Select the **Location** your VMs are deployed to.
@@ -138,7 +126,7 @@ In the Azure portal, click **All Services** and filter for **Log Analytics**. Se
 
 From the list of Log Analytics workspaces, select the workspace you created earlier.
 
-From the left-hand menu, under Workspace Data Sources, select **Virtual Machines**.
+From the left-hand menu, under **Workspace Data Sources**, select **Virtual Machines**.
 
 ![Find Virtual Machines](/docs/img/azure_log_analytics_virtual_machines.png?raw=true)
 
@@ -198,6 +186,38 @@ Finally, select the **Storage Account Logs** option under your workspace, and ad
 
 ![Storage Account Logs](/docs/img/azure_log_analytics_storage_account_logs.png?raw=true)
 
+## Verify Log Analytics Agent is running correctly (optional)
+
+To verify the agent is connected and operating correctly, run the following command on your Azure VM.
+
+```bash
+/opt/microsoft/omsagent/bin/omsadmin.sh -l
+```
+
+It should return a status similar to:
+
+```
+Primary Workspace: <workspaceId> Status: Onboarded(OMSAgent Running)
+```
+
+If the Agent is not connected to a workspace, connect it to your chosen workspace using the following command.
+
+```bash
+/opt/microsoft/omsagent/bin/omsadmin.sh -w <workspace id> -s <shared key> [-d <top level domain>]
+```
+
+If the agent is connected but not running, restart the agent using the following command.
+
+```bash
+sudo /opt/microsoft/omsagent/bin/service_control restart
+```
+
+Finally, verify the agent is operating correcly by running the following command again.
+
+```bash
+/opt/microsoft/omsagent/bin/omsadmin.sh -l
+```
+
 
 ## Setup and Configuration
 
@@ -233,6 +253,7 @@ Depending on your host template, you will require different additional variables
 | Host Template | Variables Required |
 |:------------- |:------------------ |
 | Cloud - Azure - Windows VMs | AZURE_RESOURCE_DETAILS, AZURE_LOG_ANALYTICS_DETAILS |
+| Cloud - Azure - VM Backups | AZURE_RESOURCE_DETAILS |
 
 These can be filled out as follows:
 
@@ -247,7 +268,7 @@ These can be filled out as follows:
 ![Add Variables](/docs/img/variable-AZURE_LOG_ANALYTICS_DETAILS.png?raw=true)
 
 
-#### Step 4: Reload and the system will now be monitored
+#### Step 4: Apply changes and the system will now be monitored
 
 
 ![View Output](/docs/img/output-cloud-azure-windows-vms.png?raw=true)

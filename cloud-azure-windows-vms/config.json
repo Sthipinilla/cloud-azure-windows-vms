@@ -3,6 +3,7 @@
         {
          "arg1" : "",
          "arg2" : "",
+         "arg3" : "",
          "arg4" : "",
          "label1" : "Subscription ID",
          "label2" : "Client ID",
@@ -29,7 +30,7 @@
          "secured2" : "0",
          "secured3" : "0",
          "secured4" : "0",
-         "value" : "Azure Resource Details"
+         "value" : "Azure Storage Account Details"
         },
         {
          "arg1" : "",
@@ -45,7 +46,7 @@
          "secured2" : "0",
          "secured3" : "0",
          "secured4" : "0",
-         "value" : "Azure Resource Details"
+         "value" : "Azure Connectivity Target Details"
         },
         {
          "arg1" : "",
@@ -77,7 +78,7 @@
          "secured2" : "0",
          "secured3" : "0",
          "secured4" : "0",
-         "value" : "Azure Resource Details"
+         "value" : "Azure Connectivity Source Details"
         },
         {
          "arg1" : "",
@@ -93,7 +94,39 @@
          "secured2" : "0",
          "secured3" : "0",
          "secured4" : "0",
-         "value" : "Azure Resource Details"
+         "value" : "Azure Network Watcher Details"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Resource Limit",
+         "label2" : "",
+         "label3" : "",
+         "label4" : "",
+         "name" : "AZURE_HEALTH_AVAILABILITY_SETTINGS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Health Availability Settings"
+        },
+        {
+         "arg1" : "",
+         "arg2" : "",
+         "arg3" : "",
+         "arg4" : "",
+         "label1" : "Vault Query Timespan (Days)",
+         "label2" : "",
+         "label3" : "",
+         "label4" : "",
+         "name" : "AZURE_VAULT_SETTINGS",
+         "secured1" : "0",
+         "secured2" : "0",
+         "secured3" : "0",
+         "secured4" : "0",
+         "value" : "Azure Vault Settings"
         },
         {
          "arg1" : "",
@@ -101,7 +134,7 @@
          "arg3" : "",
          "arg4" : "",
          "label1" : "Workspace ID",
-         "label2" : "Log Query Timespan",
+         "label2" : "Log Query Timespan (Minutes)",
          "label3" : "",
          "label4" : "",
          "name" : "AZURE_LOG_ANALYTICS_DETAILS",
@@ -109,7 +142,7 @@
          "secured2" : "0",
          "secured3" : "0",
          "secured4" : "0",
-         "value" : "Azure Resource Details"
+         "value" : "Azure Log Analytics Details"
         }
     ],
     "hosttemplate": [
@@ -165,6 +198,20 @@
                     "event_handler": null,
                     "exception": null,
                     "name": "Azure - Windows VM - Shutdowns",
+                    "timed_exception": null
+                }
+            ]
+        },
+        {
+            "description": "Monitor your Azure VM backups",
+            "has_icon": "0",
+            "managementurls": [],
+            "name": "Cloud - Azure - VM Backups",
+            "servicechecks": [
+                {
+                    "event_handler": null,
+                    "exception": null,
+                    "name": "Azure - VM Backup - Backup Status",
                     "timed_exception": null
                 }
             ]
@@ -516,11 +563,58 @@
             "warning_comparison": null,
             "warning_value": null
         }
+    ,
+        {
+            "alert_from_failure": "1",
+            "args": "--mode Az.Windows.VM.Backup.Status -s '%AZURE_CREDENTIALS:1%' -C '%AZURE_CREDENTIALS:2%' -S '%AZURE_CREDENTIALS:3%' -t '%AZURE_CREDENTIALS:4%' -r '%AZURE_RESOURCE_DETAILS:1%' -rn '%AZURE_RESOURCE_DETAILS:2%' -w '' -c ''",
+            "calculate_rate": null,
+            "cascaded_from": null,
+            "check_attempts": "3",
+            "check_freshness": "1",
+            "check_interval": "300",
+            "checktype": {
+                "name": "Active Plugin"
+            },
+            "critical_comparison": null,
+            "critical_value": null,
+            "dependencies": [],
+            "event_handler": "",
+            "event_handler_always_exec": "0",
+            "flap_detection_enabled": "1",
+            "invertresults": "0",
+            "keywords": [],
+            "label": null,
+            "level": 0,
+            "markdown_filter": "0",
+            "name": "Azure - VM Backup - Backup Status",
+            "description": "The backup status of a Virtual Machine in Azure [Timespan = 5mins, Granularity = 5mins]",
+            "notification_options": "w,c,r,u,f",
+            "oid": null,
+            "plugin": {
+                "name": "check_azure"
+            },
+            "retry_check_interval": "60",
+            "sensitive_arguments": "1",
+            "servicegroup": {
+                "name": "Cloud - Azure - VM Backups"
+            },
+            "snmptraprules": [],
+            "stale_state": "3",
+            "stale_text": "UNKNOWN: Service results are stale",
+            "stale_threshold_seconds": "1800",
+            "stalking": "",
+            "volatile": "0",
+            "warning_comparison": null,
+            "warning_value": null
+        }
     
     ],
     "servicegroup": [
         {
             "name": "Cloud - Azure - Windows VMs"
+        },
+        {
+            "name": "Cloud - Azure - VM Backups"
         }
     ]
 }
